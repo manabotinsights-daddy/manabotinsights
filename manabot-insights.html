@@ -1,0 +1,2378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Manabot Insights — Deck Audit Tool (Beta)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        mtg: { dark: '#0c0e14', panel: '#161924', border: '#2a2f3e', gold: '#d4a843', accent: '#f0c75e', dim: '#8b92a8' }
+      }
+    }
+  }
+}
+</script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Cinzel:wght@600;700&display=swap');
+body { font-family: 'Inter', sans-serif; background: #0c0e14; color: #e2e8f0; }
+h1, h2, h3, .font-cinzel { font-family: 'Cinzel', serif; }
+.step-dot.active { background: #d4a843; box-shadow: 0 0 12px #d4a84366; }
+.step-dot.done { background: #22c55e; }
+.card-hover:hover { border-color: #d4a843; background: #1e2233; }
+select, input, textarea { background: #1e2233 !important; border-color: #2a2f3e !important; color: #e2e8f0 !important; }
+select:focus, input:focus, textarea:focus { border-color: #d4a843 !important; outline: none; box-shadow: 0 0 0 2px #d4a84333; }
+.score-btn { min-width: 36px; transition: all 0.15s; }
+.score-btn.selected { background: #d4a843; color: #0c0e14; font-weight: 600; }
+.cat-pill { padding: 2px 8px; border-radius: 9999px; font-size: 0.7rem; font-weight: 600; }
+::-webkit-scrollbar { width: 8px; }
+::-webkit-scrollbar-track { background: #161924; }
+::-webkit-scrollbar-thumb { background: #2a2f3e; border-radius: 4px; }
+.info-box { background: linear-gradient(135deg, #161924 0%, #1a1f30 100%); border-left: 3px solid #d4a843; }
+.info-box summary { cursor: pointer; list-style: none; }
+.info-box summary::-webkit-details-marker { display: none; }
+.info-box summary::before { content: '▸'; display: inline-block; margin-right: 6px; transition: transform 0.2s; color: #d4a843; }
+.info-box[open] summary::before { transform: rotate(90deg); }
+.fade-in { animation: fadeIn 0.3s ease-in; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+.tooltip { position: relative; }
+.tooltip:hover::after { content: attr(data-tip); position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); background: #2a2f3e; color: #e2e8f0; padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; white-space: nowrap; z-index: 50; }
+</style>
+</head>
+<body class="min-h-screen">
+
+<!-- HEADER -->
+<header class="border-b border-mtg-border px-6 py-4 flex items-center justify-between">
+  <div class="flex items-center gap-4">
+    <a href="index.html" class="text-mtg-dim hover:text-mtg-gold transition text-xs border border-mtg-border rounded px-2.5 py-1 hover:border-mtg-gold/50" title="Back to Home">&larr; Home</a>
+    <div>
+      <h1 class="font-cinzel text-mtg-gold text-xl tracking-wide">Manabot Insights</h1>
+      <p class="text-mtg-dim text-xs mt-0.5">Deck Audit Tool — Beta v0.1</p>
+    </div>
+  </div>
+  <div id="step-nav" class="flex items-center gap-3"></div>
+</header>
+
+<!-- MAIN -->
+<main id="app" class="max-w-6xl mx-auto px-6 py-8"></main>
+
+<!-- CARD PREVIEW MODAL -->
+<div id="card-modal" class="fixed inset-0 bg-black/70 z-50 hidden items-center justify-center" onclick="this.classList.add('hidden'); this.classList.remove('flex');">
+  <img id="card-modal-img" class="max-h-[80vh] rounded-lg shadow-2xl" />
+</div>
+
+<script>
+// ============================================================
+// STATE
+// ============================================================
+const STATE = {
+  step: 0,
+  rawText: '',
+  commanderInput: '',    // dedicated commander name field
+  parsedCards: [],       // [{qty, name, isCommander}]
+  scryfallData: {},      // {cardName: scryfallObj}
+  fetchErrors: [],
+  characterSheet: {
+    commanderName: '',
+    primaryAbility: '',
+    axis: '',            // 'enabler' | 'payoff'
+    threatLevel: '',     // 'variable' | 'definitive'
+    bracket: '',         // '1' | '2' | '3' | '4' | '5'
+    winsBy: '',
+    sa: ['','','','',''],
+    saNames: ['','','','','']
+  },
+  categories: {},        // {cardName: {primary: '', secondary: ''}}
+  fingers: {},           // {cardName: {cs:0, dc:0, wc:0, iv:0, tf:0}}
+  feedback: {},          // {stepName: 'text'}
+  userEdited: {},        // {cardName: true} — cards manually edited by user, skip auto-assign
+  fingerEdited: {},      // {cardName: true} — cards with manually edited finger scores
+};
+
+const STEPS = [
+  { id: 'import', label: 'Import', icon: '1' },
+  { id: 'character', label: 'Character Sheet', icon: '2' },
+  { id: 'categorize', label: 'Categorize', icon: '3' },
+  { id: 'score', label: '5-Finger', icon: '4' },
+  { id: 'results', label: 'Results', icon: '5' },
+  { id: 'export', label: 'Export', icon: '6' },
+];
+
+// ============================================================
+// BRACKET PROFILES — ratio targets per bracket
+// Default land count is 38 unless the deck's MV curve proves it can sustain fewer.
+// ============================================================
+const BRACKET_PROFILES = {
+  '1': {
+    label: 'Bracket 1 — Exhibition',
+    desc: 'Ultra-casual. Theme over winning. No Game Changers.',
+    lands: [38, 40],
+    velocity: [10, 14],
+    ramp: [10, 12],
+    interaction: [5, 8],
+    wipe: [1, 2],
+    mvTarget: [3.0, 3.8],
+    mvLandAdjust: false, // Never reduce lands for B1 — consistency matters more
+    notes: 'Prioritize fun and theme. Higher land count ensures you always play the game.'
+  },
+  '2': {
+    label: 'Bracket 2 — Core',
+    desc: 'Modern precon level. No Game Changers. Strong engines, big turns.',
+    lands: [37, 39],
+    velocity: [12, 16],
+    ramp: [10, 14],
+    interaction: [7, 10],
+    wipe: [1, 3],
+    mvTarget: [2.5, 3.2],
+    mvLandAdjust: false, // Keep lands high — precon-level decks need consistency
+    notes: 'Consistency is king. 37-39 lands ensures you hit your land drops through turn 6+.'
+  },
+  '3': {
+    label: 'Bracket 3 — Upgraded',
+    desc: 'Stronger than precons, not fully optimized. Up to 3 Game Changers.',
+    lands: [35, 38],
+    velocity: [15, 18],
+    ramp: [12, 15],
+    interaction: [9, 13],
+    wipe: [2, 3],
+    mvTarget: [2.0, 2.8],
+    mvLandAdjust: true, // Can drop to 35 IF avg MV ≤ 2.2 AND ramp ≥ 14
+    notes: 'The sweet spot. Enough lands to be consistent, enough spells to have an engine.'
+  },
+  '4': {
+    label: 'Bracket 4 — Optimized',
+    desc: 'Go wild. Strongest cards, no restrictions beyond banned list.',
+    lands: [32, 36],
+    velocity: [17, 22],
+    ramp: [14, 18],
+    interaction: [12, 18],
+    wipe: [2, 4],
+    mvTarget: [1.5, 2.2],
+    mvLandAdjust: true, // Can drop to 30-32 IF avg MV ≤ 1.8 AND ramp ≥ 16
+    notes: 'Low curves can sustain fewer lands IF backed by efficient ramp (MV ≤2 rocks, rituals).'
+  },
+  '5': {
+    label: 'Bracket 5 — cEDH',
+    desc: 'Competitive. Every card optimized for efficiency. Tournament mindset.',
+    lands: [28, 33],
+    velocity: [18, 24],
+    ramp: [16, 22],
+    interaction: [14, 20],
+    wipe: [1, 3],
+    mvTarget: [1.2, 1.8],
+    mvLandAdjust: true, // Heavily ramp-dependent — 28 lands OK with 18+ ramp and avg MV ≤ 1.5
+    notes: 'Extreme efficiency. Land count is a function of ramp density and MV curve.'
+  }
+};
+
+// Returns the active bracket profile, defaulting to Bracket 3 if none selected
+function getProfile() {
+  const b = STATE.characterSheet.bracket || '3';
+  return BRACKET_PROFILES[b] || BRACKET_PROFILES['3'];
+}
+
+// Smart land recommendation: starts at bracket default, adjusts based on actual deck stats
+function recommendedLands() {
+  const profile = getProfile();
+  const avgMV = parseFloat(calcAvgMV());
+  const counts = calcCategoryCounts();
+  const rampCount = counts['Ramp'] || 0;
+  let [min, max] = profile.lands;
+
+  // Default recommendation is the HIGH end (conservative — Kody's preference)
+  let rec = max;
+
+  // Only allow downward adjustment if the profile permits it AND the deck earns it
+  if (profile.mvLandAdjust) {
+    const [mvLow] = profile.mvTarget;
+    if (avgMV <= mvLow && rampCount >= profile.ramp[1]) {
+      // Deck has a low curve AND high ramp — can safely drop to the low end
+      rec = min;
+    } else if (avgMV <= (mvLow + 0.3) && rampCount >= profile.ramp[0] + 2) {
+      // Moderate curve, decent ramp — split the difference
+      rec = Math.round((min + max) / 2);
+    }
+  }
+
+  return { min, max, recommended: rec, avgMV, rampCount };
+}
+
+const CATEGORIES = ['Velocity','Ramp','Interaction','Wipe','SA-1','SA-2','SA-3','SA-4','SA-5','Land'];
+const CAT_COLORS = {
+  'Velocity':'#3b82f6','Ramp':'#22c55e','Interaction':'#ef4444','Wipe':'#a855f7',
+  'SA-1':'#f97316','SA-2':'#eab308','SA-3':'#06b6d4','SA-4':'#ec4899','SA-5':'#8b5cf6','Land':'#6b7280'
+};
+
+// ============================================================
+// UTILITIES
+// ============================================================
+function $(sel) { return document.querySelector(sel); }
+function el(tag, attrs = {}, children = []) {
+  const e = document.createElement(tag);
+  Object.entries(attrs).forEach(([k,v]) => {
+    if (k === 'className') e.className = v;
+    else if (k === 'innerHTML') e.innerHTML = v;
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2).toLowerCase(), v);
+    else e.setAttribute(k, v);
+  });
+  children.forEach(c => { if (typeof c === 'string') e.appendChild(document.createTextNode(c)); else if (c) e.appendChild(c); });
+  return e;
+}
+
+function isLandCard(name) {
+  const sd = STATE.scryfallData[name];
+  if (!sd) return false;
+  // MDFCs (double-faced cards with "//" in name): check if the FRONT face is a land
+  // "Malakir Rebirth // Malakir Mire" → front face is Instant, NOT a land
+  // "Agadeem's Awakening // Agadeem, the Undercrypt" → front face is Sorcery, NOT a land
+  if (sd.card_faces && sd.card_faces.length >= 2) {
+    return sd.card_faces[0].type_line?.toLowerCase().includes('land');
+  }
+  return sd.type_line?.toLowerCase().includes('land');
+}
+
+function getNonLandCards() {
+  return STATE.parsedCards.filter(c => !isLandCard(c.name)).filter(c => !c.isCommander);
+}
+
+function getLandCards() {
+  return STATE.parsedCards.filter(c => isLandCard(c.name));
+}
+
+function getCardImage(name) {
+  const sd = STATE.scryfallData[name];
+  if (!sd) return '';
+  if (sd.image_uris) return sd.image_uris.normal || sd.image_uris.small || '';
+  if (sd.card_faces && sd.card_faces[0]?.image_uris) return sd.card_faces[0].image_uris.normal || '';
+  return '';
+}
+
+function saDisplayName(cat) {
+  // Convert "SA-1" etc. to the user's custom name, or "Secondary 1 (unnamed)" if not set
+  if (!cat.startsWith('SA-')) return cat;
+  const idx = parseInt(cat.split('-')[1]) - 1;
+  const cs = STATE.characterSheet;
+  const name = cs.saNames[idx];
+  return name || `Secondary ${idx + 1} (unnamed)`;
+}
+
+function catDisplayName(cat) {
+  if (!cat) return '';
+  if (cat.startsWith('SA-')) return saDisplayName(cat);
+  return cat;
+}
+
+function showCardModal(name) {
+  const img = getCardImage(name);
+  if (!img) return;
+  $('#card-modal-img').src = img;
+  $('#card-modal').classList.remove('hidden');
+  $('#card-modal').classList.add('flex');
+}
+
+// ============================================================
+// DECK PARSER
+// ============================================================
+function parseDeckList(text) {
+  const lines = text.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('//'));
+  const cards = [];
+  let isCommander = false;
+  for (const line of lines) {
+    const lower = line.toLowerCase();
+    if (lower === 'commander' || lower === 'commander:' || lower.startsWith('// commander')) { isCommander = true; continue; }
+    if (lower === 'deck' || lower === 'deck:' || lower === 'mainboard' || lower === 'mainboard:' || lower === 'companion' || lower === 'sideboard' || lower === 'sideboard:') { isCommander = false; continue; }
+
+    // Step 1: Try to extract quantity + card name from common formats
+    // Handles: "1x Agadeem's Awakening // Agadeem, the Undercrypt (znr) 90"
+    //          "1 Sol Ring (mb2) 78"
+    //          "6x Forest (tmt) 319"
+    //          "1x Sol Ring"
+    //          "Sol Ring"
+    let qty = 1, name = '', isCmdr = false;
+
+    // Try matching "Nx CardName (set) number" or "Nx CardName"
+    const match = line.match(/^(\d+)x?\s+(.+)$/i);
+    if (match) {
+      qty = parseInt(match[1]);
+      name = match[2];
+    } else {
+      name = line;
+    }
+
+    // Step 2: Strip *CMDR* tags FIRST (before set codes, since *CMDR* can appear after set code)
+    isCmdr = isCommander || /\*CMDR\*/i.test(name);
+    name = name.replace(/\s*\*CMDR\*\s*/gi, '').replace(/\s*#.*$/, '').trim();
+
+    // Step 3: Strip trailing set code + collector number: "(znr) 90", "(mb2) 178", "(plst) TMP-315"
+    name = name.replace(/\s+\([a-z0-9]+\)\s*[A-Z0-9\-]*\s*$/i, '');
+
+    // Step 4: Strip DFC back face (e.g., "Bala Ged Recovery // Bala Ged Sanctuary" → "Bala Ged Recovery")
+    name = name.split('//')[0].trim();
+
+    if (name) {
+      cards.push({ qty, name, isCommander: isCmdr });
+      if (isCmdr) isCommander = false;
+    }
+  }
+  return cards;
+}
+
+// ============================================================
+// DFC NAME HANDLING
+// ============================================================
+// Scryfall returns DFCs with " // " in the name (e.g., "Agadeem's Awakening // Agadeem, the Undercrypt")
+// but the collection API only accepts the FRONT face name for lookup.
+// We store a mapping so we can match either format.
+
+function frontFaceName(name) {
+  // "Agadeem's Awakening // Agadeem, the Undercrypt" → "Agadeem's Awakening"
+  return name.split('//')[0].trim();
+}
+
+// ============================================================
+// SCRYFALL FETCH
+// ============================================================
+async function fetchFromScryfall(cards) {
+  const uniqueNames = [...new Set(cards.map(c => c.name))];
+  const batches = [];
+  // Build lookup names — send only front face to Scryfall
+  const nameToFront = {};
+  uniqueNames.forEach(n => { nameToFront[n] = frontFaceName(n); });
+  const uniqueFronts = [...new Set(Object.values(nameToFront))];
+
+  for (let i = 0; i < uniqueFronts.length; i += 75) {
+    batches.push(uniqueFronts.slice(i, i + 75));
+  }
+  const data = {};
+  const errors = [];
+  for (const batch of batches) {
+    try {
+      const resp = await fetch('https://api.scryfall.com/cards/collection', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifiers: batch.map(n => ({ name: n })) })
+      });
+      const json = await resp.json();
+      if (json.data) json.data.forEach(c => {
+        // Store under Scryfall's full name
+        data[c.name] = c;
+        // Also store under front face name if different
+        const front = frontFaceName(c.name);
+        if (front !== c.name) data[front] = c;
+      });
+      if (json.not_found) json.not_found.forEach(c => errors.push(c.name || c));
+    } catch (e) {
+      errors.push(...batch);
+    }
+    if (batches.length > 1) await new Promise(r => setTimeout(r, 120));
+  }
+
+  // Map user's original card names to Scryfall data
+  // Handle cases where user typed "Agadeem's Awakening // Agadeem, the Undercrypt"
+  // or just "Agadeem's Awakening" — both should resolve
+  uniqueNames.forEach(userN => {
+    if (!data[userN]) {
+      const front = frontFaceName(userN);
+      if (data[front]) {
+        data[userN] = data[front];
+      }
+    }
+  });
+
+  return { data, errors };
+}
+
+// ============================================================
+// AUTO-CATEGORIZATION ENGINE
+// ============================================================
+function autoCategorize(cardName, isCommander) {
+  const sd = STATE.scryfallData[cardName];
+  if (!sd) return null;
+  if (isCommander) return null; // Commander is excluded from the 99
+
+  // Get oracle text (handle DFCs)
+  const oracle = (sd.oracle_text || (sd.card_faces ? sd.card_faces[0]?.oracle_text || '' : '')).toLowerCase();
+  const typeLine = (sd.type_line || '').toLowerCase();
+  const frontType = sd.card_faces ? (sd.card_faces[0]?.type_line || '').toLowerCase() : typeLine;
+
+  // LAND — front face is a land
+  if (isLandCard(cardName)) return { primary: 'Land', secondary: '' };
+
+  // RAMP — mana production (broad detection)
+  const isRamp = (
+    /\{t\}:? add \{/.test(oracle) ||                         // "{T}: Add {G}" etc.
+    /\{t\}:? add one mana/.test(oracle) ||                   // "Add one mana of any color"
+    /add (?:one|two|three) mana/i.test(oracle) ||
+    /search your library for (?:a |an? )?(?:basic )?(?:land|forest|plains|island|swamp|mountain)/i.test(oracle) ||
+    (/put (?:that|it|them) onto the battlefield/i.test(oracle) && /land/i.test(oracle)) ||
+    (sd.produced_mana && sd.produced_mana.length > 0 && !frontType.includes('land')) ||
+    /untap (?:all|target) land/i.test(oracle) ||              // Land untap effects (Sword of Feast and Famine)
+    /treasure token/i.test(oracle) ||                          // Treasure creators (Smothering Tithe, Dockside)
+    /cost.*(?:less|\{1\} less|\{2\} less)/i.test(oracle) ||    // Cost reducers
+    (/enchant land/i.test(oracle) && /add/i.test(oracle)) ||   // Land auras (Utopia Sprawl, Wild Growth)
+    /you may play an? additional land/i.test(oracle) ||        // Extra land drops (Exploration, Azusa)
+    /play (?:two|three) additional lands/i.test(oracle) ||     // Azusa "play two additional lands"
+    /lands you control have/i.test(oracle) ||                  // Color fixing (Dryad of the Ilysian Grove)
+    /you may play lands from your graveyard/i.test(oracle) ||  // Ramunap Excavator, Crucible of Worlds
+    /return all land cards from your graveyard to the battlefield/i.test(oracle) || // Aftermath Analyst, Splendid Reclamation
+    /create.*land.*token/i.test(oracle) ||                     // land token creators (Awaken the Woods)
+    /create x.*forest/i.test(oracle)                           // Awaken the Woods "Create X 1/1 green Forest Dryad land creature tokens"
+  );
+
+  // VELOCITY — card draw / card advantage (broader detection)
+  const isVelocity = (
+    (/draw (?:two|three|four|2|3|4|x) (?:additional )?cards/i.test(oracle)) || // "draw two cards" AND "draw two additional cards" (Sylvan Library)
+    (/\{t\}:? draw a card/i.test(oracle)) ||                    // tap-to-draw (Sensei's Divining Top, Beast Whisperer)
+    (/draw a card/i.test(oracle) && /whenever|at the beginning|each|upkeep/i.test(oracle)) || // repeatable draw
+    (/draw cards equal/i.test(oracle)) ||
+    (/draws? a card.*draws? a card/i.test(oracle)) || // multiple draw triggers
+    (/you draw a card/i.test(oracle) && /opponent|each player/i.test(oracle)) || // tax draw (Rhystic Study etc.)
+    (/exile the top.*you may (?:play|cast)/i.test(oracle)) || // impulse draw (Outpost Siege, Prosper)
+    (/look at the top.*put.*into your hand/i.test(oracle)) || // filtered draw (Sylvan Library style)
+    (/reveals?.*put.*into your hand/i.test(oracle) && /library/i.test(oracle)) || // reveal-draw
+    (/whenever.*dies.*draw/i.test(oracle)) ||                  // death-draw (Skullclamp, Midnight Reaper)
+    (/draw a card.*lose.*life/i.test(oracle) && /each|whenever|beginning/i.test(oracle)) || // Phyrexian draw (Dark Confidant etc.)
+    (/search your library.*put.*into your hand/i.test(oracle) && !/land/i.test(oracle)) || // non-land tutors count as velocity
+    (/whenever.*plays? a land.*draw/i.test(oracle)) ||          // land-triggered draw (Horn of Greed)
+    (/search your library for a creature/i.test(oracle)) ||     // creature tutors (Finale, GSZ, Worldly Tutor)
+    (/search your library.*creature card/i.test(oracle)) ||     // "search for a green creature card" (GSZ, Finale)
+    (/may play.*from the top of your library/i.test(oracle)) || // top-of-library play (Courser, Augur of Autumn, Radha)
+    (/may cast.*from the top of your library/i.test(oracle)) || // top-of-library cast (Augur of Autumn coven)
+    (/when this.*enters.*draw a card/i.test(oracle)) ||         // ETB cantrip (Kenrith's Transformation draws)
+    (/return.*land cards? from your graveyard to your hand/i.test(oracle)) // land-to-hand recursion as card advantage (Life from the Loam, Wrenn and Six)
+  );
+
+  // INTERACTION — removal/counterspells (broader: includes sorcery-speed removal and fight)
+  const isInstant = frontType.includes('instant') || /flash/i.test(oracle);
+  const isInteraction = (
+    /counter target spell/i.test(oracle) ||
+    /counter target (?:creature|artifact|enchantment|activated|triggered)/i.test(oracle) ||
+    (isInstant && /destroy target/i.test(oracle)) ||
+    (isInstant && /exile target/i.test(oracle)) ||
+    (/exile target (?:creature|permanent|artifact|enchantment)/i.test(oracle)) || // StP, PtE even as sorcery
+    (/destroy target (?:creature|artifact|enchantment|permanent)/i.test(oracle)) || // sorcery removal too (Beast Within etc.)
+    (isInstant && /return target.*to.*(?:hand|owner)/i.test(oracle)) ||
+    (isInstant && /(?:hexproof|indestructible|phase out|protection from)/i.test(oracle) && oracle.length < 200) ||
+    (/fights? target/i.test(oracle)) ||                        // fight-based removal
+    (/target.*gets? -\d+\/-\d+/i.test(oracle)) ||              // -X/-X removal
+    (/sacrifice.*target/i.test(oracle) && /opponent/i.test(oracle)) || // edict effects
+    (/each opponent sacrifices a/i.test(oracle) && !(/creature/i.test(oracle) && /all/i.test(oracle))) || // single edict (not wipe)
+    (/deals? \d+ damage to (?:target|any target)/i.test(oracle)) || // direct damage (Lightning Bolt, Mizzium Mortars)
+    (/deals? \d+ damage to any target/i.test(oracle)) ||         // "deals 3 damage to any target" (Lightning Bolt)
+    (/loses? all abilities/i.test(oracle) && /(?:is a|becomes?|base power)/i.test(oracle)) || // transformation (Kenrith's Transformation, Oko)
+    (/prevent all.*damage/i.test(oracle) && isInstant) ||        // fog effects (Obscuring Haze, Tangle)
+    (/choose new targets for target/i.test(oracle)) ||           // redirect (Deflecting Swat)
+    (/can't be countered/i.test(oracle) && /spells you control/i.test(oracle)) // anti-counter protection (Veil of Summer, Autumn's Veil)
+  );
+
+  // WIPE — mass removal that breaks parity
+  const isWipe = (
+    /destroy all (?:creatures|permanents|nonland|artifacts|enchantments)/i.test(oracle) ||
+    /exile all (?:creatures|permanents|nonland)/i.test(oracle) ||
+    /(?:each|all) (?:other )?(?:creature|permanent).*(?:gets? -|-\d+\/-\d+)/i.test(oracle) ||
+    /return all.*to their owner/i.test(oracle) ||
+    (/overload/i.test(oracle) && /(?:destroy|exile|return|bounce)/i.test(oracle)) ||
+    (/each opponent sacrifices/i.test(oracle) && /creature/i.test(oracle) && /all|each/i.test(oracle)) ||
+    /all creatures get -\d+\/-\d+/i.test(oracle) ||
+    /deals? \d+ damage to each creature/i.test(oracle) ||        // damage-based wipes (Blasphemous Act)
+    /damage to each opponent and each creature/i.test(oracle) || // Delayed Blast Fireball pattern
+    (/overload/i.test(oracle) && /deals? \d+ damage/i.test(oracle)) // overloaded damage (Mizzium Mortars)
+  );
+
+  // Assign with priority: Wipe > Interaction > (Ramp+Velocity dual) > Ramp > Velocity
+  let primary = '', secondary = '';
+  if (isWipe) {
+    primary = 'Wipe';
+    // Wipe that also draws? Secondary = Velocity
+    if (isVelocity) secondary = 'Velocity';
+  } else if (isInteraction) {
+    primary = 'Interaction';
+    // Interaction that also ramps? (e.g., Beast Within type cards that also untap lands)
+    if (isRamp) secondary = 'Ramp';
+    else if (isVelocity) secondary = 'Velocity';
+  } else if (isRamp && isVelocity) {
+    primary = 'Ramp'; secondary = 'Velocity';
+  } else if (isRamp) {
+    primary = 'Ramp';
+    if (isVelocity) secondary = 'Velocity';
+  } else if (isVelocity) {
+    primary = 'Velocity';
+    if (isRamp) secondary = 'Ramp';
+  }
+
+  return { primary: primary || '', secondary: secondary || '' };
+}
+
+function autoScoreFingers(cardName) {
+  const sd = STATE.scryfallData[cardName];
+  const scores = { cs: 0, dc: 0, wc: 0, iv: 0, tf: 0 };
+  if (!sd) return scores;
+
+  const cat = STATE.categories[cardName];
+  const oracle = (sd.oracle_text || (sd.card_faces ? sd.card_faces[0]?.oracle_text || '' : '')).toLowerCase();
+  const typeLine = (sd.type_line || '').toLowerCase();
+  const cs = STATE.characterSheet;
+
+  // ── Commander context ──
+  const cmdr = STATE.parsedCards.find(c => c.isCommander);
+  const cmdrSD = cmdr ? STATE.scryfallData[cmdr.name] : null;
+  const cmdrOracle = cmdrSD ? (cmdrSD.oracle_text || (cmdrSD.card_faces ? cmdrSD.card_faces[0]?.oracle_text || '' : '')).toLowerCase() : '';
+  const cmdrMV = cmdrSD ? cmdrSD.cmc : 5;
+  const cmdrKeywords = cmdrSD?.keywords?.map(k => k.toLowerCase()) || [];
+  const cmdrTypeLine = cmdrSD ? (cmdrSD.type_line || '').toLowerCase() : '';
+
+  // ── CS (Commander Signal) ──
+  // Extract commander themes from oracle text
+  const cmdrThemes = [];
+  // Keyword abilities on the commander (landfall, flying, etc.)
+  cmdrKeywords.forEach(kw => cmdrThemes.push(kw));
+  // Detect mechanical themes from commander oracle
+  if (/landfall|whenever a land.*enters/i.test(cmdrOracle)) cmdrThemes.push('landfall', 'land-enters');
+  if (/deals? \d+ damage to each opponent/i.test(cmdrOracle)) cmdrThemes.push('damage-opponents', 'burn');
+  if (/draw a card/i.test(cmdrOracle)) cmdrThemes.push('draw');
+  if (/create.*token/i.test(cmdrOracle)) cmdrThemes.push('tokens');
+  if (/\+1\/\+1 counter|proliferate/i.test(cmdrOracle)) cmdrThemes.push('counters');
+  if (/sacrifice/i.test(cmdrOracle)) cmdrThemes.push('sacrifice');
+  if (/graveyard/i.test(cmdrOracle)) cmdrThemes.push('graveyard');
+  if (/combat|attack|dealing combat damage/i.test(cmdrOracle)) cmdrThemes.push('combat');
+  if (/whenever you cast/i.test(cmdrOracle)) cmdrThemes.push('cast-trigger');
+  if (/whenever.*dies/i.test(cmdrOracle)) cmdrThemes.push('death-trigger');
+  if (/exile/i.test(cmdrOracle) && !/exile.*from.*graveyard/i.test(cmdrOracle)) cmdrThemes.push('exile');
+  if (/enchant|aura|constellation/i.test(cmdrOracle)) cmdrThemes.push('enchantments');
+  if (/artifact|equipment/i.test(cmdrOracle) || /artifact/i.test(cmdrTypeLine)) cmdrThemes.push('artifacts');
+  if (/copy|clone/i.test(cmdrOracle)) cmdrThemes.push('copy');
+  if (/life.*gain|you gain.*life/i.test(cmdrOracle)) cmdrThemes.push('lifegain');
+
+  // Also use the user's Primary Ability description to detect themes
+  const priAbility = (cs.primaryAbility || '').toLowerCase();
+  if (/landfall|land/i.test(priAbility)) cmdrThemes.push('landfall', 'land-enters');
+  if (/damage|burn|ping/i.test(priAbility)) cmdrThemes.push('damage-opponents', 'burn');
+  if (/token/i.test(priAbility)) cmdrThemes.push('tokens');
+  if (/counter|proliferate/i.test(priAbility)) cmdrThemes.push('counters');
+  if (/sacrifice|aristocrat/i.test(priAbility)) cmdrThemes.push('sacrifice');
+  if (/graveyard|reanimate/i.test(priAbility)) cmdrThemes.push('graveyard');
+
+  // Score CS: does this card directly interact with the commander's themes?
+  let csScore = 0;
+  if (cmdrThemes.includes('landfall') || cmdrThemes.includes('land-enters')) {
+    // Landfall commander: CS=1 for landfall cards, extra land drops, land fetch, fetchlands
+    if (/landfall|whenever a land.*enters/i.test(oracle)) csScore = 1;
+    else if (/you may play.*additional land/i.test(oracle)) csScore = 1;
+    else if (/play.*lands from/i.test(oracle)) csScore = 1;
+    else if (/search your library for.*land/i.test(oracle) && /onto the battlefield/i.test(oracle)) csScore = 1;
+    else if (/put.*land.*onto the battlefield/i.test(oracle)) csScore = 1;
+    else if (/return.*land.*from your graveyard/i.test(oracle)) csScore = 1;
+    else if (/search your library for.*(?:forest|plains|island|swamp|mountain)/i.test(oracle)) csScore = 1;
+    else if (typeLine.includes('land') && /search your library|sacrifice/i.test(oracle)) csScore = 1; // fetchlands
+    else if (/create.*land.*token/i.test(oracle)) csScore = 1;
+  }
+  if (cmdrThemes.includes('damage-opponents') || cmdrThemes.includes('burn')) {
+    if (/deals?.*damage.*(?:plus|additional|\+|instead|more)/i.test(oracle)) csScore = 1; // damage amplifiers
+    else if (/deals? \d+ damage to each opponent/i.test(oracle)) csScore = 1;
+    else if (/if a.*source.*would deal damage.*deals that much.*plus/i.test(oracle)) csScore = 1; // Torbran
+    else if (/double.*damage/i.test(oracle)) csScore = 1;
+  }
+  if (cmdrThemes.includes('tokens') && /create.*token/i.test(oracle)) csScore = 1;
+  if (cmdrThemes.includes('counters') && /\+1\/\+1 counter|proliferate/i.test(oracle)) csScore = 1;
+  if (cmdrThemes.includes('sacrifice') && /sacrifice.*(?:draw|gain|deal|create|add)/i.test(oracle)) csScore = 1;
+  if (cmdrThemes.includes('graveyard') && /graveyard|reanimate|unearth|dredge/i.test(oracle)) csScore = 1;
+  if (cmdrThemes.includes('cast-trigger') && /whenever you cast/i.test(oracle)) csScore = 1;
+  if (cmdrThemes.includes('death-trigger') && /whenever.*dies/i.test(oracle)) csScore = 1;
+  if (cmdrThemes.includes('enchantments') && /enchant|constellation|whenever.*enchantment/i.test(oracle)) csScore = 1;
+  if (cmdrThemes.includes('artifacts') && /artifact/i.test(typeLine)) csScore = 1;
+  if (cmdrThemes.includes('lifegain') && /you gain.*life|life.*gain/i.test(oracle)) csScore = 1;
+  if (cmdrThemes.includes('combat') && /attack|combat|deal.*combat damage/i.test(oracle) && !/prevent.*combat/i.test(oracle)) csScore = 1;
+
+  // Shared keyword match (e.g., commander has flying, card has flying)
+  if (csScore === 0) {
+    const cardKeywords = sd.keywords?.map(k => k.toLowerCase()) || [];
+    if (cmdrKeywords.some(kw => cardKeywords.includes(kw) && kw !== 'flying')) csScore = 1;
+  }
+
+  // SA-based CS: if any SA name describes a theme and the card matches that SA bucket
+  if (csScore === 0 && cat?.primary?.startsWith('SA-')) {
+    // Cards assigned to an SA category are directly serving the strategy
+    csScore = 1;
+  }
+
+  scores.cs = csScore;
+
+  // ── DC (Dual-Category) ──
+  if (cat?.secondary) scores.dc = 1;
+
+  // ── WC (Web Connected) ──
+  // Check how many other cards this card mechanically interacts with.
+  // Tutors automatically connect to anything they can find.
+  // Landfall/land-play cards connect to other landfall cards.
+  // Draw/recursion engines connect to the deck broadly.
+
+  const cardFingerprint = [];
+  if (/landfall|whenever a land.*enters/i.test(oracle)) cardFingerprint.push('landfall');
+  if (/draw a card|draw cards/i.test(oracle)) cardFingerprint.push('draw');
+  if (/search your library for.*creature/i.test(oracle)) cardFingerprint.push('creature-tutor');
+  if (/search your library for.*land/i.test(oracle)) cardFingerprint.push('land-tutor');
+  if (/search your library/i.test(oracle) && !/for.*creature|for.*land/i.test(oracle)) cardFingerprint.push('general-tutor');
+  if (/create.*token/i.test(oracle)) cardFingerprint.push('tokens');
+  if (/sacrifice/i.test(oracle)) cardFingerprint.push('sacrifice');
+  if (/graveyard/i.test(oracle)) cardFingerprint.push('graveyard');
+  if (/counter target/i.test(oracle)) cardFingerprint.push('counter');
+  if (/deals? \d+ damage/i.test(oracle)) cardFingerprint.push('damage');
+  if (/\+1\/\+1 counter/i.test(oracle)) cardFingerprint.push('counters');
+  if (/land.*enters|play.*land|additional land|put.*land.*onto/i.test(oracle)) cardFingerprint.push('land-play');
+  if (/treasure token/i.test(oracle)) cardFingerprint.push('treasure');
+  if (/whenever.*enters/i.test(oracle)) cardFingerprint.push('etb');
+  if (/from your graveyard/i.test(oracle)) cardFingerprint.push('recursion');
+  if (/exile.*top/i.test(oracle)) cardFingerprint.push('impulse');
+  if (/add \{|add one mana|\{t\}:? add/i.test(oracle) && !typeLine.includes('land')) cardFingerprint.push('mana-source');
+  if (/whenever you cast/i.test(oracle)) cardFingerprint.push('cast-trigger');
+  if (/damage.*plus|double.*damage|deals? that much.*instead|if a.*source.*would deal damage/i.test(oracle)) cardFingerprint.push('damage-amp');
+
+  let connections = 0;
+  const nonLand = getNonLandCards();
+  for (const other of nonLand) {
+    if (other.name === cardName) continue;
+    const otherSD = STATE.scryfallData[other.name];
+    if (!otherSD) continue;
+    const otherOracle = (otherSD.oracle_text || (otherSD.card_faces ? otherSD.card_faces[0]?.oracle_text || '' : '')).toLowerCase();
+    const otherType = (otherSD.type_line || '').toLowerCase();
+    let connected = false;
+    for (const fp of cardFingerprint) {
+      // Landfall ↔ anything that puts lands onto battlefield or triggers from lands
+      if (fp === 'landfall' && /land.*enters|additional land|play.*land|put.*land.*onto|search.*library.*land.*battlefield|landfall/i.test(otherOracle)) { connected = true; break; }
+      if (fp === 'land-play' && /landfall|whenever a land/i.test(otherOracle)) { connected = true; break; }
+      // Creature tutors connect to every creature in the deck
+      if (fp === 'creature-tutor' && /creature/i.test(otherType)) { connected = true; break; }
+      // Land tutors connect to landfall cards and other land-matters
+      if (fp === 'land-tutor' && /landfall|land.*enters|additional land/i.test(otherOracle)) { connected = true; break; }
+      // General tutors connect to high-value targets (creatures, enchantments, key pieces)
+      if (fp === 'general-tutor' && (otherSD.cmc <= 4 || /creature|enchantment/i.test(otherType))) { connected = true; break; }
+      // Draw engines connect to everything (they find more gas)
+      if (fp === 'draw' && /draw a card|whenever|landfall|enters/i.test(otherOracle)) { connected = true; break; }
+      if (fp === 'tokens' && /token|sacrifice|anthem|populate|whenever.*creature/i.test(otherOracle)) { connected = true; break; }
+      if (fp === 'sacrifice' && /whenever.*dies|death|create.*token|graveyard/i.test(otherOracle)) { connected = true; break; }
+      if (fp === 'graveyard' && /graveyard|dredge|mill|from your graveyard|return.*from/i.test(otherOracle)) { connected = true; break; }
+      if (fp === 'damage' && /damage.*plus|double.*damage|deals.*damage|each opponent/i.test(otherOracle)) { connected = true; break; }
+      if (fp === 'recursion' && /graveyard|dredge|return.*from|mill/i.test(otherOracle)) { connected = true; break; }
+      if (fp === 'treasure' && /treasure|artifact.*enters|sacrifice.*artifact/i.test(otherOracle)) { connected = true; break; }
+      if (fp === 'mana-source' && /\{x\}|pay.*\{|additional.*cost/i.test(otherOracle)) { connected = true; break; }
+      if (fp === 'etb' && /whenever.*enters|flicker|blink|return.*to.*hand/i.test(otherOracle)) { connected = true; break; }
+      if (fp === 'cast-trigger' && /whenever you cast/i.test(otherOracle)) { connected = true; break; }
+      // Damage amplifiers connect to anything that deals damage
+      if (fp === 'damage-amp' && /deals? \d+ damage|damage to each|damage to target|deals? damage equal/i.test(otherOracle)) { connected = true; break; }
+    }
+    if (connected) connections++;
+  }
+  scores.wc = connections >= 5 ? 1 : 0;
+
+  // ── IV (Independent Value) ──
+  // 1.0 = fully independent, 0.5 = diminished without commander, 0 = dead without
+  const pri = cat?.primary || '';
+  if (['Ramp', 'Interaction', 'Wipe', 'Velocity'].includes(pri)) {
+    scores.iv = 1; // Core categories always work without commander
+  } else if (pri.startsWith('SA-')) {
+    // SA cards: check if they do something on their own
+    // Cards with ETB effects, mana abilities, or self-contained abilities are independent
+    if (/when.*enters|whenever|at the beginning|activated ability/i.test(oracle) && !/whenever.*commander/i.test(oracle)) {
+      scores.iv = 0.5; // Functional but diminished
+    }
+    // Check if card explicitly requires the commander or a specific other card
+    if (/\{t\}:? add/i.test(oracle) || /draw a card/i.test(oracle) || /create.*token/i.test(oracle) ||
+        /destroy target|exile target|deals? \d+ damage/i.test(oracle)) {
+      scores.iv = 1; // Self-sufficient effect
+    }
+    // Damage amplifiers/doublers do nothing without damage sources, but the deck has plenty
+    if (/damage.*plus|double.*damage|instead/i.test(oracle) && !/draw|create|add/i.test(oracle)) {
+      scores.iv = 0.5; // Needs damage sources (which the deck has, but weaker without commander)
+    }
+  } else if (!pri) {
+    // Uncategorized: creatures with static/triggered abilities have some independent value
+    if (/creature/i.test(typeLine)) {
+      scores.iv = 0.5; // Creatures can at least attack/block
+    }
+    if (/when.*enters|draw|create|destroy|exile|add|deals? \d+ damage/i.test(oracle)) scores.iv = 0.5;
+  }
+
+  // ── TF (Temporal Fit) ──
+  // Playable within the deployment window (MV <= commander MV + 1)
+  // Also consider cards with alternate costs or cost reduction
+  const cardMV = sd.cmc || 0;
+  if (cardMV <= cmdrMV + 1) {
+    scores.tf = 1;
+  } else if (/without paying its mana cost/i.test(oracle) || /alternative cost/i.test(oracle) ||
+             /suspend|evoke|foretell|overload|emerge|convoke|delve/i.test(oracle) ||
+             /\{0\}:|you may cast.*without/i.test(oracle)) {
+    scores.tf = 1; // Has alternate deployment
+  } else if (cardMV <= cmdrMV + 3 && /flash/i.test(oracle)) {
+    scores.tf = 1; // Flash gives temporal flexibility
+  }
+
+  return scores;
+}
+
+// ============================================================
+// MECHANICAL KEYWORD BUCKETS (shared by suggestion + auto-assign)
+// ============================================================
+const MECH_BUCKETS = [
+  { name: 'Protection', desc: 'Hexproof, indestructible, phase out, shroud',
+    test: o => /hexproof|indestructible|phase out|shroud|protection from|can't be (the target|destroyed)|ward/i.test(o) },
+  { name: 'Recursion', desc: 'Return cards from graveyard to hand or battlefield',
+    test: o => /return.*from.*graveyard|reanimate|unearth|encore|from your graveyard to (your hand|the battlefield)/i.test(o) },
+  { name: 'Tokens', desc: 'Create creature tokens or token doublers',
+    test: o => /create.*token|creature token|token.*creature|double.*token/i.test(o) },
+  { name: 'Tribal Synergy', desc: 'Creature type lords, type-specific buffs, tribal payoffs',
+    test: (o, t) => /all .*(creatures you control|elves|goblins|zombies|vampires|merfolk|warriors|wizards|knights|humans|dragons|beasts|hydras|dinosaurs) get/i.test(o) || /choose a creature type/i.test(o) },
+  { name: 'Sacrifice Outlet', desc: 'Sacrifice creatures or permanents for value',
+    test: o => /sacrifice (a|another|a creature|an? )/i.test(o) && /draw|gain|deal|create|add/i.test(o) },
+  { name: 'Evasion', desc: 'Unblockable, flying, trample, menace',
+    test: o => /can't be blocked|unblockable|menace|trample|flying|shadow|fear|intimidate/i.test(o) && o.length < 300 },
+  { name: 'Counters', desc: '+1/+1 counters, counter doublers, proliferate',
+    test: o => /\+1\/\+1 counter|proliferate|double.*counter|enters.*with.*counter/i.test(o) },
+  { name: 'Equipment', desc: 'Equipment and equip-matters effects',
+    test: (o, t) => /equipment/i.test(t) || /equip|equipped creature/i.test(o) },
+  { name: 'Enchantress', desc: 'Enchantment synergies and constellation effects',
+    test: (o, t) => /enchantment/i.test(t) && !/aura/i.test(t) || /constellation|whenever.*enchantment.*enters/i.test(o) },
+  { name: 'Graveyard Fill', desc: 'Mill self, discard, loot — stocking the graveyard',
+    test: o => /mill|discard.*card|put.*into your graveyard|surveil/i.test(o) },
+  { name: 'Tutor', desc: 'Search your library for specific cards',
+    test: o => /search your library for.*card/i.test(o) && !/land/i.test(o) },
+  { name: 'Combat Tricks', desc: 'Extra combats, haste enablers, double strike',
+    test: o => /additional combat|extra combat|haste|double strike|first strike.*until/i.test(o) },
+  { name: 'Stax / Tax', desc: 'Tax effects, cost increases, restrictions',
+    test: o => /costs? .*more|can't cast|each opponent.*pays|opponents can't/i.test(o) },
+  { name: 'Life Drain', desc: 'Drain opponents\' life, damage on triggers',
+    test: o => /(?:each opponent|target opponent).*loses? \d+ life|drain|deals? \d+ damage to each opponent/i.test(o) },
+  { name: 'Clone / Copy', desc: 'Copy creatures, spells, or permanents',
+    test: o => /copy of|becomes? a copy|clone|copies of/i.test(o) },
+  { name: 'Landfall', desc: 'Triggers when lands enter the battlefield',
+    test: o => /landfall|whenever a land enters/i.test(o) },
+  { name: 'Topdeck', desc: 'Top-of-library manipulation — scry, topdeck tutors',
+    test: o => /scry|look at the top|reveal the top.*put/i.test(o) && !/draw/i.test(o) },
+  { name: 'Payloads', desc: 'Big finishers, high-impact creatures, game-ending threats',
+    test: (o, t, sd) => /creature/i.test(t) && sd?.cmc >= 5 },
+  { name: 'Buff / Anthem', desc: 'Permanent power/toughness boosts, anthem effects',
+    test: o => /creatures you control get \+|gets? \+\d+\/\+\d+ until|anthem/i.test(o) },
+  { name: 'Mana Sink', desc: 'Activated abilities that use excess mana for value',
+    test: o => /\{x\}|pay \{|activate.*only/i.test(o) && /draw|create|deal|destroy|return/i.test(o) },
+  { name: 'Damage Amplification', desc: 'Damage doublers, extra damage, damage replacement effects',
+    test: o => /deals? that much damage plus|double.*damage|deals? .*additional.*damage|damage.*instead|if a.*source.*would deal damage/i.test(o) },
+  { name: 'Land Recursion', desc: 'Return lands from graveyard, play lands from graveyard',
+    test: o => /return.*land.*from your graveyard|play lands? from your graveyard|land.*from.*graveyard to/i.test(o) },
+  { name: 'Extra Lands', desc: 'Play additional lands per turn',
+    test: o => /play (?:an |one |two |three )?additional land|you may play.*additional land/i.test(o) },
+];
+
+function getCardOracleAndType(cardName) {
+  const sd = STATE.scryfallData[cardName];
+  if (!sd) return { oracle: '', typeLine: '', sd: null };
+  const oracle = (sd.oracle_text || (sd.card_faces ? sd.card_faces[0]?.oracle_text || '' : '')).toLowerCase();
+  const typeLine = (sd.type_line || '').toLowerCase();
+  return { oracle, typeLine, sd };
+}
+
+// ============================================================
+// SA SUGGESTION ENGINE
+// ============================================================
+function suggestSecondaryAbilities() {
+  const uncategorized = [];
+  STATE.parsedCards.forEach(c => {
+    if (c.isCommander) return;
+    const cat = STATE.categories[c.name];
+    if (cat?.primary && ['Ramp','Velocity','Interaction','Wipe','Land'].includes(cat.primary)) return;
+    const { oracle, typeLine, sd } = getCardOracleAndType(c.name);
+    if (!sd) return;
+    uncategorized.push({ name: c.name, oracle, typeLine, sd });
+  });
+
+  const scored = MECH_BUCKETS.map(b => ({
+    ...b,
+    count: uncategorized.filter(c => b.test(c.oracle, c.typeLine, c.sd)).length,
+    cards: uncategorized.filter(c => b.test(c.oracle, c.typeLine, c.sd)).map(c => c.name)
+  })).filter(b => b.count >= 2)
+    .sort((a, b) => b.count - a.count);
+
+  const top = scored.slice(0, 5);
+  const generic = [
+    { name: 'Payloads', desc: 'Win conditions and high-impact threats', count: 0, cards: [] },
+    { name: 'Synergy Pieces', desc: 'Cards that amplify the commander\'s ability', count: 0, cards: [] },
+    { name: 'Utility', desc: 'Flexible cards that serve multiple roles', count: 0, cards: [] },
+    { name: 'Engine', desc: 'Loops and recursion that keep the machine running', count: 0, cards: [] },
+    { name: 'Finishers', desc: 'How you close out the game', count: 0, cards: [] },
+  ];
+  while (top.length < 5) {
+    const g = generic.find(g => !top.some(t => t.name === g.name));
+    if (g) top.push(g); else break;
+  }
+  return top.map(b => ({
+    name: b.name,
+    desc: b.desc + (b.cards.length > 0 ? ` (${b.count} cards: ${b.cards.slice(0, 3).join(', ')}${b.cards.length > 3 ? '...' : ''})` : '')
+  }));
+}
+
+// ============================================================
+// SA AUTO-ASSIGNMENT — runs when entering Step 3
+// Assigns uncategorized cards to the user's defined SAs
+// ============================================================
+function autoAssignSACategories() {
+  const cs = STATE.characterSheet;
+
+  // Build a mapping: for each defined SA name, find the best matching MECH_BUCKET
+  const saBuckets = [];
+  for (let i = 0; i < 5; i++) {
+    const saName = (cs.saNames[i] || '').toLowerCase().trim();
+    if (!saName) continue;
+    // Find the bucket whose name best matches this SA
+    const bucket = MECH_BUCKETS.find(b => b.name.toLowerCase() === saName);
+    if (bucket) {
+      saBuckets.push({ saKey: `SA-${i+1}`, bucket, priority: i });
+    } else {
+      // Fuzzy match: check if the SA name is a substring of a bucket name or vice versa
+      const fuzzy = MECH_BUCKETS.find(b =>
+        b.name.toLowerCase().includes(saName) || saName.includes(b.name.toLowerCase())
+      );
+      if (fuzzy) saBuckets.push({ saKey: `SA-${i+1}`, bucket: fuzzy, priority: i });
+    }
+  }
+
+  // Helper: check if a card matches Ramp/Velocity/Interaction/Wipe detection
+  function detectCoreCategory(oracle, typeLine, sd, frontType) {
+    const ft = frontType || typeLine;
+    const isInstant = ft.includes('instant') || /flash/i.test(oracle);
+    const hits = [];
+    // Ramp
+    if (/\{t\}:? add \{/.test(oracle) || /\{t\}:? add one mana/.test(oracle) || /add (?:one|two|three) mana/i.test(oracle) ||
+        /search your library for (?:a |an? )?(?:basic )?(?:land|forest|plains|island|swamp|mountain)/i.test(oracle) ||
+        (/put (?:that|it|them) onto the battlefield/i.test(oracle) && /land/i.test(oracle)) ||
+        (sd?.produced_mana && sd.produced_mana.length > 0 && !ft.includes('land')) ||
+        /treasure token/i.test(oracle) || /untap (?:all|target) land/i.test(oracle) ||
+        /cost.*(?:less|\{1\} less|\{2\} less)/i.test(oracle)) hits.push('Ramp');
+    // Velocity
+    if (/draw (?:two|three|four|2|3|4|x) cards/i.test(oracle) ||
+        (/draw a card/i.test(oracle) && /whenever|at the beginning|each|upkeep/i.test(oracle)) ||
+        /draw cards equal/i.test(oracle) || /whenever.*dies.*draw/i.test(oracle) ||
+        (/exile the top.*you may (?:play|cast)/i.test(oracle)) ||
+        (/draw a card.*lose.*life/i.test(oracle) && /each|whenever|beginning/i.test(oracle))) hits.push('Velocity');
+    // Interaction
+    if (/counter target spell/i.test(oracle) || /destroy target (?:creature|artifact|enchantment|permanent)/i.test(oracle) ||
+        /exile target (?:creature|permanent|artifact|enchantment)/i.test(oracle) ||
+        /fights? target/i.test(oracle) || /target.*gets? -\d+\/-\d+/i.test(oracle)) hits.push('Interaction');
+    return hits;
+  }
+
+  // For each non-land, non-commander card, try to assign to an SA if uncategorized
+  STATE.parsedCards.forEach(c => {
+    if (c.isCommander) return;
+    if (STATE.userEdited[c.name]) return; // Skip cards the user manually edited
+    const existing = STATE.categories[c.name];
+    const { oracle, typeLine, sd } = getCardOracleAndType(c.name);
+    if (!sd) return;
+
+    // If card has no primary category, try to assign it to a matching SA
+    if (!existing?.primary || existing.primary === '') {
+      for (const { saKey, bucket } of saBuckets) {
+        if (bucket.test(oracle, typeLine, sd)) {
+          STATE.categories[c.name] = { primary: saKey, secondary: existing?.secondary || '' };
+          break;
+        }
+      }
+    }
+
+    // If card HAS a primary category but no secondary, try to find one:
+    if (STATE.categories[c.name]?.primary && !STATE.categories[c.name]?.secondary) {
+      const pri = STATE.categories[c.name].primary;
+      let foundSec = '';
+
+      // Check 1: Does this card match any SA bucket?
+      for (const { saKey, bucket } of saBuckets) {
+        if (saKey === pri) continue;
+        if (bucket.test(oracle, typeLine, sd)) {
+          foundSec = saKey;
+          break;
+        }
+      }
+
+      // Check 2: If primary is an SA, check if card also qualifies as Ramp/Velocity/Interaction
+      if (!foundSec && pri.startsWith('SA-')) {
+        const frontType = sd?.card_faces ? (sd.card_faces[0]?.type_line || '').toLowerCase() : typeLine;
+        const coreHits = detectCoreCategory(oracle, typeLine, sd, frontType);
+        if (coreHits.length > 0) foundSec = coreHits[0];
+      }
+
+      // Check 3: If primary is a core category, also check SA buckets
+      if (!foundSec && ['Ramp','Velocity','Interaction','Wipe'].includes(pri)) {
+        for (const { saKey, bucket } of saBuckets) {
+          if (bucket.test(oracle, typeLine, sd)) {
+            foundSec = saKey;
+            break;
+          }
+        }
+      }
+
+      // Check 4: Cross-core secondary (e.g., Ramp card that also draws = secondary Velocity)
+      if (!foundSec && ['Ramp','Velocity','Interaction','Wipe'].includes(pri)) {
+        const frontType = sd?.card_faces ? (sd.card_faces[0]?.type_line || '').toLowerCase() : typeLine;
+        const coreHits = detectCoreCategory(oracle, typeLine, sd, frontType);
+        for (const hit of coreHits) {
+          if (hit !== pri) { foundSec = hit; break; }
+        }
+      }
+
+      if (foundSec) {
+        STATE.categories[c.name].secondary = foundSec;
+        if (STATE.fingers[c.name]) STATE.fingers[c.name].dc = 1;
+      }
+    }
+  });
+}
+
+// ============================================================
+// CALCULATIONS
+// ============================================================
+function calcCategoryCounts() {
+  const counts = {};
+  CATEGORIES.forEach(c => counts[c] = 0);
+  const nonLand = getNonLandCards();
+  // Auto-count lands
+  counts['Land'] = getLandCards().reduce((s,c) => s + c.qty, 0);
+  nonLand.forEach(c => {
+    const cat = STATE.categories[c.name];
+    if (cat?.primary && counts[cat.primary] !== undefined) counts[cat.primary] += c.qty;
+    if (cat?.secondary && cat.secondary !== cat.primary && counts[cat.secondary] !== undefined) counts[cat.secondary] += c.qty;
+  });
+  return counts;
+}
+
+function calcAvgMV() {
+  const nonLand = getNonLandCards();
+  let total = 0, count = 0;
+  nonLand.forEach(c => {
+    const sd = STATE.scryfallData[c.name];
+    if (sd) { total += sd.cmc * c.qty; count += c.qty; }
+  });
+  return count > 0 ? (total / count).toFixed(2) : '0.00';
+}
+
+function calcFingerAverages() {
+  const nonLand = getNonLandCards();
+  let totalScore = 0, count = 0;
+  nonLand.forEach(c => {
+    const f = STATE.fingers[c.name];
+    if (f) {
+      totalScore += (f.cs || 0) + (f.dc || 0) + (f.wc || 0) + (f.iv || 0) + (f.tf || 0);
+      count++;
+    }
+  });
+  return count > 0 ? (totalScore / count).toFixed(2) : '0.00';
+}
+
+function calcSD() {
+  const nonLand = getNonLandCards();
+  let cs = 0, total = 0;
+  nonLand.forEach(c => { const f = STATE.fingers[c.name]; if (f) { cs += f.cs; total++; } });
+  return total > 0 ? ((cs / total) * 100).toFixed(1) : '0.0';
+}
+
+function calcCI() {
+  const nonLand = getNonLandCards();
+  let iv = 0, total = 0;
+  nonLand.forEach(c => { const f = STATE.fingers[c.name]; if (f) { iv += f.iv; total++; } });
+  return total > 0 ? ((iv / total) * 100).toFixed(1) : '0.0';
+}
+
+function calcCCP() {
+  const nonLand = getNonLandCards();
+  let dc = 0, total = 0;
+  nonLand.forEach(c => { const f = STATE.fingers[c.name]; if (f) { dc += f.dc; total++; } });
+  return total > 0 ? ((dc / total) * 100).toFixed(1) : '0.0';
+}
+
+
+function getSDGrade(pct) {
+  if (pct <= 20) return 'F'; if (pct <= 35) return 'D'; if (pct <= 50) return 'C';
+  if (pct <= 65) return 'B'; if (pct <= 80) return 'A'; return 'S';
+}
+function getCIGrade(pct) {
+  if (pct <= 30) return 'F'; if (pct <= 50) return 'D'; if (pct <= 65) return 'C';
+  if (pct <= 80) return 'B'; if (pct <= 95) return 'A'; return 'S';
+}
+function getCCPGrade(pct) {
+  if (pct <= 10) return 'F'; if (pct <= 20) return 'D'; if (pct <= 30) return 'C';
+  if (pct <= 45) return 'B'; if (pct <= 60) return 'A'; return 'S';
+}
+
+function gradeColor(g) {
+  return { F:'#ef4444', D:'#f97316', C:'#eab308', B:'#22c55e', A:'#3b82f6', S:'#a855f7' }[g] || '#8b92a8';
+}
+
+function drawRadarChart(canvasEl, scores) {
+  const ctx = canvasEl.getContext('2d');
+  const w = canvasEl.width;
+  const h = canvasEl.height;
+  const centerX = w / 2;
+  const centerY = h / 2;
+  const radius = 120;
+  const levels = 5;
+
+  // Pentagon vertices: 5 axes
+  const angles = [0, 1, 2, 3, 4].map(i => (i * 2 * Math.PI / 5) - Math.PI / 2);
+  const axisLabels = ['SD', 'CI', 'CCP', 'ED', 'RI'];
+  const scoreValues = [scores.sd, scores.ci, scores.ccp, scores.ed, scores.ri];
+
+  // Helper: convert polar to cartesian
+  const polarToCart = (angle, dist) => ({
+    x: centerX + dist * Math.cos(angle),
+    y: centerY + dist * Math.sin(angle)
+  });
+
+  // Clear canvas
+  ctx.fillStyle = 'transparent';
+  ctx.clearRect(0, 0, w, h);
+
+  // Draw grid: 5 concentric pentagons at 20%, 40%, 60%, 80%, 100%
+  ctx.strokeStyle = '#2a2f3e';
+  ctx.lineWidth = 1;
+  for (let level = 1; level <= levels; level++) {
+    const levelRadius = (radius * level) / levels;
+    ctx.beginPath();
+    angles.forEach((angle, i) => {
+      const p = polarToCart(angle, levelRadius);
+      if (i === 0) ctx.moveTo(p.x, p.y);
+      else ctx.lineTo(p.x, p.y);
+    });
+    ctx.closePath();
+    ctx.stroke();
+  }
+
+  // Draw axis lines from center to vertices
+  ctx.strokeStyle = '#2a2f3e';
+  ctx.lineWidth = 1;
+  angles.forEach(angle => {
+    const p = polarToCart(angle, radius);
+    ctx.beginPath();
+    ctx.moveTo(centerX, centerY);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+  });
+
+  // Draw data polygon: semi-transparent gold fill with gold border
+  ctx.fillStyle = 'rgba(212, 168, 67, 0.15)';
+  ctx.strokeStyle = '#d4a843';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  scoreValues.forEach((val, i) => {
+    const normalizedVal = Math.min(val, 100);
+    const dist = (normalizedVal / 100) * radius;
+    const p = polarToCart(angles[i], dist);
+    if (i === 0) ctx.moveTo(p.x, p.y);
+    else ctx.lineTo(p.x, p.y);
+  });
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // Draw vertex dots: small gold circles
+  ctx.fillStyle = '#d4a843';
+  scoreValues.forEach((val, i) => {
+    const normalizedVal = Math.min(val, 100);
+    const dist = (normalizedVal / 100) * radius;
+    const p = polarToCart(angles[i], dist);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 4, 0, 2 * Math.PI);
+    ctx.fill();
+  });
+
+  // Draw axis labels at vertices: white text
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 12px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  angles.forEach((angle, i) => {
+    const labelDist = radius + 25;
+    const p = polarToCart(angle, labelDist);
+    ctx.fillText(axisLabels[i], p.x, p.y);
+  });
+
+  // Draw percentage labels next to data points
+  ctx.fillStyle = '#d4a843';
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'center';
+  scoreValues.forEach((val, i) => {
+    const normalizedVal = Math.min(val, 100);
+    const dist = (normalizedVal / 100) * radius;
+    const p = polarToCart(angles[i], dist);
+    const offset = 18;
+    const labelP = polarToCart(angles[i], dist + offset);
+    ctx.fillText(`${Math.round(normalizedVal)}%`, labelP.x, labelP.y);
+  });
+}
+
+function getTierBadgeInfo() {
+  const avgFinger = parseFloat(calcFingerAverages());
+  let tier, tierColor, tierBgColor;
+
+  if (avgFinger <= 1.5) {
+    tier = 'Synergy Soup';
+    tierColor = '#ef4444';
+    tierBgColor = 'rgba(239, 68, 68, 0.1)';
+  } else if (avgFinger <= 2.5) {
+    tier = 'Standard';
+    tierColor = '#eab308';
+    tierBgColor = 'rgba(234, 179, 8, 0.1)';
+  } else if (avgFinger <= 3.5) {
+    tier = 'Focused';
+    tierColor = '#22c55e';
+    tierBgColor = 'rgba(34, 197, 94, 0.1)';
+  } else if (avgFinger <= 4.5) {
+    tier = 'Engine Online';
+    tierColor = '#3b82f6';
+    tierBgColor = 'rgba(59, 130, 246, 0.1)';
+  } else {
+    tier = 'Inevitability Machine';
+    tierColor = '#a855f7';
+    tierBgColor = 'rgba(168, 85, 247, 0.1)';
+  }
+
+  return { tier, tierColor, tierBgColor, avgFinger };
+}
+
+function checkPillars() {
+  const flags = [];
+  const counts = calcCategoryCounts();
+  const nonLand = getNonLandCards();
+  const profile = getProfile();
+  const bracketLabel = STATE.characterSheet.bracket ? `Bracket ${STATE.characterSheet.bracket}` : 'your bracket';
+
+  // Pillar 1: Macro-Unfocus — uncategorized cards
+  const uncategorized = nonLand.filter(c => !STATE.categories[c.name]?.primary);
+  if (uncategorized.length > 3) flags.push({ pillar: 1, label: 'Macro-Unfocus', msg: `${uncategorized.length} cards have no category assigned. Every non-land card must fit a defined role.` });
+
+  // Pillar 3: Reactive Illusion — interaction exceeds velocity
+  if (counts['Interaction'] > profile.interaction[1] && counts['Velocity'] < profile.velocity[0]) {
+    flags.push({ pillar: 3, label: 'Reactive Illusion', msg: `Interaction (${counts['Interaction']}) exceeds ${profile.interaction[1]} while Velocity (${counts['Velocity']}) is below ${profile.velocity[0]}. Early game is reactive, not proactive.` });
+  }
+
+  // Pillar 4: Top-Down Trap
+  const ci = parseFloat(calcCI());
+  if (ci < 50) flags.push({ pillar: 4, label: 'Top-Down Trap', msg: `Commander Independence at ${ci}% — too many cards are dead without the commander.` });
+
+  // Framework ratio checks — bracket-aware
+  if (counts['Velocity'] < profile.velocity[0]) flags.push({ pillar: 0, label: 'Velocity Shortfall', msg: `Velocity at ${counts['Velocity']}/${profile.velocity[0]} minimum for ${bracketLabel}. Card draw engine is underpowered.` });
+  if (counts['Ramp'] < profile.ramp[0]) flags.push({ pillar: 0, label: 'Ramp Shortfall', msg: `Ramp at ${counts['Ramp']}/${profile.ramp[0]} minimum for ${bracketLabel}. Mana acceleration is insufficient.` });
+  if (counts['Land'] < profile.lands[0]) flags.push({ pillar: 0, label: 'Land Shortfall', msg: `Lands at ${counts['Land']}/${profile.lands[0]} minimum for ${bracketLabel}. Mana base is too thin.` });
+  if (counts['Land'] > profile.lands[1]) flags.push({ pillar: 0, label: 'Land Excess', msg: `Lands at ${counts['Land']}/${profile.lands[1]} max for ${bracketLabel}. Too many land slots consuming spell slots.` });
+
+  // MV curve check — bracket-aware
+  const avgMV = parseFloat(calcAvgMV());
+  if (avgMV > profile.mvTarget[1]) flags.push({ pillar: 0, label: 'High MV Curve', msg: `Average non-land MV is ${avgMV}. Target is ${profile.mvTarget[0]}-${profile.mvTarget[1]} for ${bracketLabel}.` });
+
+  // Smart land warning — even within bracket range, flag if lands are low relative to curve
+  const landRec = recommendedLands();
+  if (counts['Land'] < landRec.recommended && counts['Land'] >= profile.lands[0]) {
+    flags.push({ pillar: 0, label: 'Land Warning', msg: `Lands at ${counts['Land']} — technically within ${bracketLabel} range, but with avg MV ${landRec.avgMV} and ${landRec.rampCount} ramp sources, recommend ${landRec.recommended} lands for consistency.` });
+  }
+
+  return flags;
+}
+
+// ============================================================
+// RENDER ENGINE
+// ============================================================
+function render() {
+  renderStepNav();
+  const app = $('#app');
+  app.innerHTML = '';
+  const renderers = [renderImport, renderCharacterSheet, renderCategorize, renderScore, renderResults, renderExport];
+  renderers[STATE.step]();
+}
+
+function renderStepNav() {
+  const nav = $('#step-nav');
+  nav.innerHTML = '';
+  STEPS.forEach((s, i) => {
+    const dot = el('div', {
+      className: `step-dot w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold cursor-pointer border-2 transition-all ${i === STATE.step ? 'active border-mtg-gold text-mtg-dark' : i < STATE.step ? 'done border-green-500 text-white' : 'border-mtg-border text-mtg-dim'}`,
+      onClick: () => { if (i <= STATE.step || i <= furthestStep()) { STATE.step = i; render(); } },
+      'data-tip': s.label
+    }, [s.icon]);
+    dot.classList.add('tooltip');
+    nav.appendChild(dot);
+    if (i < STEPS.length - 1) nav.appendChild(el('div', { className: 'w-6 h-px bg-mtg-border' }));
+  });
+}
+
+function furthestStep() {
+  // Allow navigating back to completed steps
+  if (Object.keys(STATE.scryfallData).length === 0) return 0;
+  if (!STATE.characterSheet.commanderName) return 1;
+  return 5;
+}
+
+function navButtons(canBack, canNext, nextLabel = 'Continue', onNext = null) {
+  const div = el('div', { className: 'flex justify-between mt-8 pt-4 border-t border-mtg-border' });
+  if (canBack) {
+    div.appendChild(el('button', {
+      className: 'px-5 py-2 rounded border border-mtg-border text-mtg-dim hover:text-white hover:border-mtg-gold transition',
+      onClick: () => { STATE.step--; render(); }
+    }, ['Back']));
+  } else {
+    div.appendChild(el('div'));
+  }
+  if (canNext) {
+    div.appendChild(el('button', {
+      className: 'px-6 py-2 rounded bg-mtg-gold text-mtg-dark font-semibold hover:bg-mtg-accent transition',
+      onClick: () => { if (onNext) onNext(); STATE.step++; render(); }
+    }, [nextLabel]));
+  }
+  return div;
+}
+
+// ============================================================
+// STEP 1: IMPORT
+// ============================================================
+function renderImport() {
+  const app = $('#app');
+  const container = el('div', { className: 'fade-in max-w-3xl mx-auto' });
+
+  container.appendChild(el('h2', { className: 'font-cinzel text-2xl text-mtg-gold mb-2' }, ['Import Your Deck']));
+  container.appendChild(el('p', { className: 'text-mtg-dim text-sm mb-4' }, ['Enter your commander below, then paste your deck list. Supports Archidekt, Moxfield, and standard formats like "1x Sol Ring" or "1 Sol Ring".']));
+
+  container.appendChild(makeInfoBox(
+    'Guide: Importing Your Deck',
+    'Accurate card data is the foundation of every metric in this tool. Scryfall provides oracle text, mana values, type lines, and color identity for every card — this powers the auto-categorization engine and every calculation downstream.',
+    'Paste your full deck list from Archidekt (Export → Text), Moxfield (Export → Text), or type it manually. Enter your commander name in the dedicated box above the deck list — this ensures it\'s correctly identified even if the name is ambiguous (e.g. "Ezuri" matches multiple cards). Double-faced cards work with either the full name or just the front face.',
+    'After fetching, every card in your deck will have its complete Scryfall data loaded. The tool will auto-detect lands vs. spells, identify your commander, and run an initial categorization pass before you even reach Step 2.'
+  ));
+
+  // Commander Name Input
+  const cmdrBox = el('div', { className: 'mb-4 rounded-lg border border-mtg-gold/40 bg-mtg-gold/5 p-4' });
+  const cmdrLabel = el('label', { className: 'block text-sm font-semibold text-mtg-gold mb-1.5' }, ['Commander']);
+  cmdrBox.appendChild(cmdrLabel);
+  const cmdrInput = el('input', {
+    type: 'text',
+    className: 'w-full rounded-lg border-2 border-mtg-gold/30 px-4 py-2.5 text-sm font-semibold',
+    placeholder: 'e.g. Lathril, Blade of the Elves',
+    value: STATE.commanderInput || ''
+  });
+  cmdrInput.style.background = '#1e2233';
+  cmdrInput.style.borderColor = '#d4a84366';
+  cmdrInput.addEventListener('input', e => { STATE.commanderInput = e.target.value; });
+  cmdrBox.appendChild(cmdrInput);
+  cmdrBox.appendChild(el('p', { className: 'text-xs text-mtg-dim mt-1.5' }, ['Type the exact card name. This card will be set as your commander even if it appears in the deck list below.']));
+  container.appendChild(cmdrBox);
+
+  // Deck List Textarea
+  container.appendChild(el('label', { className: 'block text-sm font-semibold text-white mb-1.5' }, ['Deck List (the 99)']));
+  const textarea = el('textarea', {
+    className: 'w-full h-56 rounded-lg border p-4 text-sm font-mono resize-none',
+    placeholder: `1 Sol Ring\n1 Arcane Signet\n1 Nature's Lore\n1 Beast Whisperer\n1x Agadeem's Awakening // Agadeem, the Undercrypt (znr) 90\n6x Forest (tmt) 319\n...`
+  });
+  textarea.value = STATE.rawText;
+  textarea.addEventListener('input', e => { STATE.rawText = e.target.value; });
+  container.appendChild(textarea);
+
+  // Status
+  const status = el('div', { id: 'import-status', className: 'mt-4 text-sm' });
+  container.appendChild(status);
+
+  // Fetch button
+  const btn = el('button', {
+    className: 'mt-4 px-6 py-3 rounded-lg bg-mtg-gold text-mtg-dark font-semibold hover:bg-mtg-accent transition text-sm',
+    onClick: async () => {
+      const text = textarea.value;
+      if (!text.trim()) { status.innerHTML = '<span class="text-red-400">Please paste a deck list first.</span>'; return; }
+      STATE.rawText = text;
+      STATE.commanderInput = cmdrInput.value.trim();
+      STATE.parsedCards = parseDeckList(text);
+
+      // === DEDUP: Merge duplicate card entries by name ===
+      const deduped = new Map();
+      STATE.parsedCards.forEach(c => {
+        const key = c.name.toLowerCase();
+        if (deduped.has(key)) {
+          const existing = deduped.get(key);
+          existing.qty += c.qty;
+          if (c.isCommander) existing.isCommander = true;
+        } else {
+          deduped.set(key, { ...c });
+        }
+      });
+      STATE.parsedCards = [...deduped.values()];
+
+      // If commander was typed in the dedicated box, mark it
+      if (STATE.commanderInput) {
+        STATE.parsedCards.forEach(c => c.isCommander = false);
+        const cmdrFront = frontFaceName(STATE.commanderInput);
+        const existing = STATE.parsedCards.find(c =>
+          c.name.toLowerCase() === STATE.commanderInput.toLowerCase() ||
+          frontFaceName(c.name).toLowerCase() === cmdrFront.toLowerCase()
+        );
+        if (existing) {
+          existing.isCommander = true;
+        } else {
+          STATE.parsedCards.unshift({ qty: 1, name: STATE.commanderInput, isCommander: true });
+        }
+      }
+
+      if (STATE.parsedCards.length === 0) { status.innerHTML = '<span class="text-red-400">Could not parse any cards. Check format.</span>'; return; }
+
+      status.innerHTML = `<span class="text-mtg-gold">Fetching ${STATE.parsedCards.length} cards from Scryfall...</span>`;
+      btn.disabled = true;
+      btn.textContent = 'Fetching...';
+
+      const { data, errors } = await fetchFromScryfall(STATE.parsedCards);
+      STATE.scryfallData = data;
+      STATE.fetchErrors = errors;
+
+      // If the commander wasn't found by exact name (e.g., user typed "Ezuri"),
+      // try Scryfall's fuzzy search to resolve to the full card name
+      const cmdrCard = STATE.parsedCards.find(c => c.isCommander);
+      if (cmdrCard && !data[cmdrCard.name]) {
+        try {
+          const fuzzyResp = await fetch(`https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(cmdrCard.name)}`);
+          if (fuzzyResp.ok) {
+            const fuzzyData = await fuzzyResp.json();
+            data[cmdrCard.name] = fuzzyData;
+            data[fuzzyData.name] = fuzzyData;
+            const oldName = cmdrCard.name;
+            cmdrCard.name = fuzzyData.name;
+            STATE.scryfallData = data;
+            const errIdx = errors.indexOf(oldName);
+            if (errIdx > -1) errors.splice(errIdx, 1);
+          } else {
+            // Fuzzy failed (ambiguous name like "Ezuri" matching multiple cards)
+            // Try autocomplete → fetch each match → pick the first legendary creature
+            const acResp = await fetch(`https://api.scryfall.com/cards/autocomplete?q=${encodeURIComponent(cmdrCard.name)}`);
+            if (acResp.ok) {
+              const acData = await acResp.json();
+              // Filter to names that start with what the user typed (likely the commander, not "Ezuri's Predation")
+              const candidates = (acData.data || []).filter(n => n.toLowerCase().startsWith(cmdrCard.name.toLowerCase()));
+              if (candidates.length > 0) {
+                // Fetch all candidates to find the legendary creature(s)
+                const candResp = await fetch('https://api.scryfall.com/cards/collection', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ identifiers: candidates.map(n => ({ name: n })) })
+                });
+                if (candResp.ok) {
+                  const candData = await candResp.json();
+                  const legendaries = (candData.data || []).filter(c => /legendary creature/i.test(c.type_line));
+                  if (legendaries.length === 1) {
+                    // Exactly one legendary creature match — use it
+                    const resolved = legendaries[0];
+                    const oldName = cmdrCard.name;
+                    data[oldName] = resolved;
+                    data[resolved.name] = resolved;
+                    cmdrCard.name = resolved.name;
+                    STATE.scryfallData = data;
+                    const errIdx = errors.indexOf(oldName);
+                    if (errIdx > -1) errors.splice(errIdx, 1);
+                  } else if (legendaries.length > 1) {
+                    // Multiple legendary creatures — store them so Step 2 can offer a picker
+                    STATE.cmdrCandidates = legendaries;
+                    legendaries.forEach(c => { data[c.name] = c; });
+                    // Default to first one for now
+                    const resolved = legendaries[0];
+                    data[cmdrCard.name] = resolved;
+                    cmdrCard.name = resolved.name;
+                    STATE.scryfallData = data;
+                  }
+                }
+              }
+            }
+          }
+        } catch(e) { /* fuzzy/autocomplete failed, continue with what we have */ }
+      }
+
+      // If no commander was specified in the dedicated box, try to auto-detect from card data
+      if (!STATE.parsedCards.some(c => c.isCommander)) {
+        for (const c of STATE.parsedCards) {
+          const sd = data[c.name];
+          if (sd && sd.type_line && /legendary creature/i.test(sd.type_line)) {
+            c.isCommander = true;
+            break;
+          }
+        }
+      }
+
+      // Auto-fill character sheet commander name
+      const cmdr = STATE.parsedCards.find(c => c.isCommander);
+      if (cmdr) STATE.characterSheet.commanderName = cmdr.name;
+
+      // === AUTO-CATEGORIZE all cards using Scryfall data ===
+      STATE.categories = {}; // reset on re-fetch
+      STATE.parsedCards.forEach(c => {
+        const cat = autoCategorize(c.name, c.isCommander);
+        if (cat) STATE.categories[c.name] = cat;
+      });
+
+      // Initialize finger scores and auto-score what we can
+      STATE.fingers = {};
+      getNonLandCards().forEach(c => {
+        STATE.fingers[c.name] = autoScoreFingers(c.name);
+      });
+
+      let msg = `<span class="text-green-400">Found ${STATE.parsedCards.length} cards.</span>`;
+      const detectedCmdr = STATE.parsedCards.find(c => c.isCommander);
+      if (detectedCmdr) msg += `<br><span class="text-mtg-gold">Commander: ${detectedCmdr.name}</span>`;
+      const landCount = STATE.parsedCards.filter(c => isLandCard(c.name)).reduce((s,c) => s+c.qty, 0);
+      const nonLandCount = getNonLandCards().reduce((s,c) => s+c.qty, 0);
+      msg += `<br><span class="text-mtg-dim">${nonLandCount} spells · ${landCount} lands</span>`;
+      if (errors.length > 0) msg += `<br><span class="text-yellow-400">Could not find: ${errors.join(', ')}</span>`;
+      status.innerHTML = msg;
+      btn.disabled = false;
+      btn.textContent = 'Fetch Card Data';
+
+      // Show continue
+      const existingNav = container.querySelector('.nav-btns');
+      if (existingNav) existingNav.remove();
+      const nav = navButtons(false, true);
+      nav.classList.add('nav-btns');
+      container.appendChild(nav);
+    }
+  }, ['Fetch Card Data']);
+  container.appendChild(btn);
+
+  // If already fetched, show continue
+  if (Object.keys(STATE.scryfallData).length > 0) {
+    status.innerHTML = `<span class="text-green-400">${Object.keys(STATE.scryfallData).length} cards loaded.</span>`;
+    container.appendChild(navButtons(false, true));
+  }
+
+  app.appendChild(container);
+}
+
+// ============================================================
+// STEP 2: CHARACTER SHEET
+// ============================================================
+function renderCharacterSheet() {
+  const app = $('#app');
+  const cs = STATE.characterSheet;
+  const container = el('div', { className: 'fade-in max-w-3xl mx-auto' });
+
+  container.appendChild(el('h2', { className: 'font-cinzel text-2xl text-mtg-gold mb-2' }, ['Commander Character Sheet']));
+  container.appendChild(el('p', { className: 'text-mtg-dim text-sm mb-4' }, ['Define your commander\'s identity. This drives everything: categorization, SWP scoring, and the audit diagnosis.']));
+
+  container.appendChild(makeInfoBox(
+    'Guide: Filling the Character Sheet',
+    'The Character Sheet forces you to articulate WHY your deck exists before judging individual cards. Without a clear mechanical identity, every card evaluation becomes subjective. The Axis (Enabler vs. Payoff) determines how the 99 should be structured — Enabler commanders need more independent value in the 99, while Payoff commanders need more cards that feed the commander directly.',
+    'Edit the Primary Ability down to the core mechanical function — not the full oracle text, but the one sentence that describes what your deck is built around. Choose Enabler if the commander creates conditions (mana, tokens, triggers) for the 99 to win, or Payoff if the commander IS the win condition. For Secondary Abilities, click "Analyze Deck & Suggest" to have the tool scan your cards\' keywords and propose 5 categories — then customize the names to match your strategy.',
+    'Your 5 Secondary Abilities become the custom categories used in Step 3. Cards that don\'t fit Velocity, Ramp, Interaction, or Wipe will be auto-sorted into these SA buckets based on mechanical keyword matching. The better you name them, the more accurate the auto-fill.'
+  ));
+
+  const form = el('div', { className: 'space-y-5' });
+
+  // Commander Name — carried over from Step 1
+  const cmdr = STATE.parsedCards.find(c => c.isCommander);
+  const cmdrSD = cmdr ? STATE.scryfallData[cmdr.name] : null;
+
+  const cmdrBox = el('div', { className: 'rounded-lg border border-mtg-gold/40 bg-mtg-gold/5 p-4' });
+  const cmdrRow = el('div', { className: 'flex gap-4 items-start' });
+
+  if (cmdrSD) {
+    const img = el('img', { src: getCardImage(cmdr.name), className: 'w-36 rounded-lg shadow-lg cursor-pointer flex-shrink-0', onClick: () => showCardModal(cmdr.name) });
+    cmdrRow.appendChild(img);
+  }
+
+  const cmdrFields = el('div', { className: 'flex-1 space-y-3' });
+
+  // Show current commander prominently
+  cmdrFields.appendChild(el('label', { className: 'block text-xs font-semibold text-mtg-gold' }, ['Commander']));
+  if (cmdrSD) {
+    cmdrFields.appendChild(el('div', { className: 'text-lg font-bold text-white' }, [cmdr.name]));
+    cmdrFields.appendChild(el('div', { className: 'text-xs text-mtg-dim', innerHTML: `<span class="text-mtg-gold">MV ${cmdrSD.cmc}</span> · ${cmdrSD.type_line} · ${cmdrSD.color_identity?.join('') || 'C'}` }));
+  } else if (cmdr) {
+    cmdrFields.appendChild(el('div', { className: 'text-lg font-bold text-white' }, [cmdr.name]));
+    cmdrFields.appendChild(el('div', { className: 'text-xs text-yellow-400' }, ['(Not found on Scryfall — check spelling on Step 1)']));
+  } else {
+    cmdrFields.appendChild(el('div', { className: 'text-lg font-bold text-yellow-400' }, ['No commander detected']));
+    cmdrFields.appendChild(el('div', { className: 'text-xs text-mtg-dim' }, ['Go back to Step 1 and enter your commander name in the Commander box.']));
+  }
+
+  // If there were multiple commander candidates from fuzzy search, show a picker
+  if (STATE.cmdrCandidates && STATE.cmdrCandidates.length > 1) {
+    const ambigBox = el('div', { className: 'mt-3 p-3 rounded border border-yellow-500/30 bg-yellow-500/5' });
+    ambigBox.appendChild(el('div', { className: 'text-xs font-semibold text-yellow-400 mb-2' }, ['Multiple commanders match — which one is yours?']));
+    const candGrid = el('div', { className: 'flex gap-3 flex-wrap' });
+    STATE.cmdrCandidates.forEach(cand => {
+      const isSelected = cmdr && cmdr.name === cand.name;
+      const candBtn = el('div', {
+        className: `rounded-lg border-2 p-2 cursor-pointer transition text-center ${isSelected ? 'border-mtg-gold bg-mtg-gold/10' : 'border-mtg-border hover:border-mtg-dim'}`,
+        onClick: () => {
+          STATE.parsedCards.forEach(c => c.isCommander = false);
+          const existing = STATE.parsedCards.find(c => c.name === cand.name);
+          if (existing) { existing.isCommander = true; }
+          else { STATE.parsedCards.unshift({ qty: 1, name: cand.name, isCommander: true }); }
+          STATE.scryfallData[cand.name] = cand;
+          cs.commanderName = cand.name;
+          STATE.cmdrCandidates = null; // Clear after selection
+          render();
+        }
+      });
+      const img = cand.image_uris?.small || (cand.card_faces?.[0]?.image_uris?.small) || '';
+      if (img) candBtn.appendChild(el('img', { src: img, className: 'w-24 rounded mb-1' }));
+      candBtn.appendChild(el('div', { className: `text-xs font-semibold ${isSelected ? 'text-mtg-gold' : 'text-white'}` }, [cand.name]));
+      candBtn.appendChild(el('div', { className: 'text-xs text-mtg-dim' }, [`MV ${cand.cmc}`]));
+      candGrid.appendChild(candBtn);
+    });
+    ambigBox.appendChild(candGrid);
+    cmdrBox.appendChild(ambigBox);
+  }
+
+  // "Wrong commander?" — collapsible dropdown to change it
+  const changeToggle = el('button', {
+    className: 'text-xs text-mtg-dim hover:text-mtg-gold underline mt-2 cursor-pointer',
+    onClick: () => {
+      const sel = cmdrBox.querySelector('.cmdr-change-panel');
+      if (sel) { sel.classList.toggle('hidden'); return; }
+
+      const panel = el('div', { className: 'cmdr-change-panel mt-3 p-3 rounded border border-mtg-border bg-mtg-dark' });
+      panel.appendChild(el('div', { className: 'text-xs text-mtg-dim mb-2' }, ['Select a different card as your commander:']));
+      const cmdrSelect = el('select', { className: 'w-full rounded border px-3 py-2 text-sm' });
+      cmdrSelect.appendChild(el('option', { value: '' }, ['— Choose a card —']));
+
+      // Show legendary creatures first, then everything else
+      const legendaries = STATE.parsedCards.filter(c => {
+        const sd = STATE.scryfallData[c.name];
+        return sd?.type_line && /legendary creature/i.test(sd.type_line);
+      });
+      const others = STATE.parsedCards.filter(c => {
+        const sd = STATE.scryfallData[c.name];
+        return !sd?.type_line || !/legendary creature/i.test(sd.type_line);
+      });
+
+      if (legendaries.length > 0) {
+        const grp1 = el('optgroup', { label: 'Legendary Creatures' });
+        legendaries.forEach(c => {
+          const sd = STATE.scryfallData[c.name];
+          grp1.appendChild(el('option', { value: c.name }, [c.name + (sd ? ` (MV ${sd.cmc})` : '')]));
+        });
+        cmdrSelect.appendChild(grp1);
+      }
+      const grp2 = el('optgroup', { label: 'Other Cards' });
+      others.forEach(c => {
+        const sd = STATE.scryfallData[c.name];
+        grp2.appendChild(el('option', { value: c.name }, [c.name + (sd ? ` (MV ${sd.cmc})` : '')]));
+      });
+      cmdrSelect.appendChild(grp2);
+
+      cmdrSelect.addEventListener('change', e => {
+        if (!e.target.value) return;
+        STATE.parsedCards.forEach(c => c.isCommander = false);
+        const card = STATE.parsedCards.find(c => c.name === e.target.value);
+        if (card) card.isCommander = true;
+        cs.commanderName = e.target.value;
+        render();
+      });
+      panel.appendChild(cmdrSelect);
+      cmdrBox.appendChild(panel);
+    }
+  }, ['Wrong commander? Click to change']);
+  cmdrFields.appendChild(changeToggle);
+
+  cmdrRow.appendChild(cmdrFields);
+  cmdrBox.appendChild(cmdrRow);
+  form.appendChild(cmdrBox);
+
+  // Primary Ability — auto-fill from oracle text if empty
+  if (!cs.primaryAbility && cmdrSD) {
+    const oText = cmdrSD.oracle_text || (cmdrSD.card_faces ? cmdrSD.card_faces.map(f => f.oracle_text || '').join(' // ') : '');
+    if (oText) cs.primaryAbility = oText;
+  }
+  form.appendChild(makeLabel('Primary Ability'));
+  form.appendChild(el('p', { className: 'text-mtg-dim text-xs -mt-1 mb-1' }, ['Pre-filled from oracle text. Edit this down to the core mechanical function your deck is built around.']));
+  // Use textarea instead of input for oracle text which can be long
+  const paTA = el('textarea', { className: 'w-full rounded border px-3 py-2 text-sm h-20 resize-none', placeholder: 'Describe the primary mechanical function...' });
+  paTA.value = cs.primaryAbility || '';
+  paTA.addEventListener('input', e => cs.primaryAbility = e.target.value);
+  form.appendChild(paTA);
+
+  // Bracket Selection
+  form.appendChild(makeLabel('Bracket'));
+  form.appendChild(el('p', { className: 'text-mtg-dim text-xs -mt-1 mb-2' }, ['What power level is this deck? This sets the baseline recommendations for land count, ramp, velocity, and interaction targets.']));
+  const bracketRow = el('div', { className: 'grid grid-cols-5 gap-2 mb-2' });
+  ['1','2','3','4','5'].forEach(b => {
+    const bp = BRACKET_PROFILES[b];
+    const selected = cs.bracket === b;
+    const card = el('div', {
+      className: `rounded-lg border-2 p-3 cursor-pointer transition text-center ${selected ? 'border-mtg-gold bg-mtg-gold/10' : 'border-mtg-border hover:border-mtg-dim'}`,
+      onClick: () => { cs.bracket = b; render(); }
+    }, [
+      el('div', { className: `text-lg font-bold ${selected ? 'text-mtg-gold' : 'text-white'}` }, [b]),
+      el('div', { className: 'text-xs text-mtg-dim mt-1 leading-tight' }, [bp.label.split(' — ')[1] || bp.label])
+    ]);
+    bracketRow.appendChild(card);
+  });
+  form.appendChild(bracketRow);
+
+  // Show bracket details if selected
+  if (cs.bracket) {
+    const bp = BRACKET_PROFILES[cs.bracket];
+    const detailBox = el('div', { className: 'rounded-lg border border-mtg-border bg-mtg-panel p-3 mb-2 text-xs' });
+    detailBox.appendChild(el('div', { className: 'text-mtg-gold font-semibold mb-1' }, [bp.label]));
+    detailBox.appendChild(el('div', { className: 'text-mtg-dim mb-2' }, [bp.desc]));
+    const recGrid = el('div', { className: 'grid grid-cols-5 gap-2 text-center' });
+    [
+      ['Lands', `${bp.lands[0]}-${bp.lands[1]}`],
+      ['Velocity', `${bp.velocity[0]}-${bp.velocity[1]}`],
+      ['Ramp', `${bp.ramp[0]}-${bp.ramp[1]}`],
+      ['Interaction', `${bp.interaction[0]}-${bp.interaction[1]}`],
+      ['Avg MV', `${bp.mvTarget[0]}-${bp.mvTarget[1]}`]
+    ].forEach(([label, val]) => {
+      recGrid.appendChild(el('div', {}, [
+        el('div', { className: 'text-mtg-dim' }, [label]),
+        el('div', { className: 'text-white font-semibold' }, [val])
+      ]));
+    });
+    detailBox.appendChild(recGrid);
+    detailBox.appendChild(el('div', { className: 'text-mtg-dim mt-2 italic' }, [bp.notes]));
+    form.appendChild(detailBox);
+  }
+
+  // Commander Axis
+  form.appendChild(makeLabel('Commander Axis'));
+  const axisRow = el('div', { className: 'flex gap-3' });
+  axisRow.appendChild(makeRadioCard('Enabler', 'The commander creates conditions for the 99 to win', cs.axis === 'enabler', () => { cs.axis = 'enabler'; render(); }));
+  axisRow.appendChild(makeRadioCard('Payoff', 'The commander IS the primary win condition', cs.axis === 'payoff', () => { cs.axis = 'payoff'; render(); }));
+  form.appendChild(axisRow);
+
+  // Threat Level
+  form.appendChild(makeLabel('Threat Level'));
+  const tlRow = el('div', { className: 'flex gap-3' });
+  tlRow.appendChild(makeRadioCard('Variable', 'Incremental value over many turns', cs.threatLevel === 'variable', () => { cs.threatLevel = 'variable'; render(); }));
+  tlRow.appendChild(makeRadioCard('Definitive', 'Specific combo or sudden lethal', cs.threatLevel === 'definitive', () => { cs.threatLevel = 'definitive'; render(); }));
+  form.appendChild(tlRow);
+
+  // Wins By
+  form.appendChild(makeLabel('"Wins By" Statement'));
+  form.appendChild(el('p', { className: 'text-mtg-dim text-xs -mt-1 mb-1' }, ['How does this deck close games? Center the statement on the COMMANDER, not a card in the 99.']));
+  const winsTA = el('textarea', { className: 'w-full rounded border px-3 py-2 text-sm h-20 resize-none', placeholder: 'This deck wins by...' });
+  winsTA.value = cs.winsBy;
+  winsTA.addEventListener('input', e => cs.winsBy = e.target.value);
+  form.appendChild(winsTA);
+
+  // 5 Secondary Abilities
+  form.appendChild(makeLabel('5 Secondary Abilities'));
+  form.appendChild(el('p', { className: 'text-mtg-dim text-xs -mt-1 mb-1' }, ['These are the 5 custom mechanical roles that support your commander. Name each one and describe what it does.']));
+
+  // "Suggest" button — analyzes uncategorized cards to propose SAs
+  const suggestBtn = el('button', {
+    className: 'mb-3 px-4 py-2 rounded border border-mtg-gold/50 text-mtg-gold text-xs hover:bg-mtg-gold/10 transition',
+    onClick: () => {
+      const suggestions = suggestSecondaryAbilities();
+      suggestions.forEach((s, i) => {
+        if (!cs.saNames[i]) cs.saNames[i] = s.name;
+        if (!cs.sa[i]) cs.sa[i] = s.desc;
+      });
+      render();
+    }
+  }, ['Analyze Deck & Suggest Secondary Abilities']);
+  form.appendChild(suggestBtn);
+
+  for (let i = 0; i < 5; i++) {
+    const row = el('div', { className: 'flex gap-2 mb-2 items-center' });
+    const colorDot = el('div', { className: 'w-4 h-4 rounded-full flex-shrink-0', style: `background:${CAT_COLORS['SA-'+(i+1)]}` });
+    const numLabel = el('div', { className: 'text-xs text-mtg-dim w-4 flex-shrink-0' }, [String(i+1)]);
+    const nameIn = el('input', { className: 'w-36 rounded border px-2 py-1.5 text-sm font-semibold', placeholder: `Name (e.g., Protection)`, value: cs.saNames[i] });
+    nameIn.addEventListener('input', e => { cs.saNames[i] = e.target.value; });
+    const descIn = el('input', { className: 'flex-1 rounded border px-2 py-1.5 text-sm', placeholder: `What cards go here? (e.g., "Hexproof, indestructible, phase out")`, value: cs.sa[i] });
+    descIn.addEventListener('input', e => { cs.sa[i] = e.target.value; });
+    row.appendChild(colorDot);
+    row.appendChild(numLabel);
+    row.appendChild(nameIn);
+    row.appendChild(descIn);
+    form.appendChild(row);
+  }
+
+  container.appendChild(form);
+
+  // Feedback
+  container.appendChild(makeFeedbackBox('character', 'How does the Character Sheet feel? Is anything confusing or missing?'));
+
+  container.appendChild(navButtons(true, true));
+  app.appendChild(container);
+}
+
+function makeLabel(text) {
+  return el('label', { className: 'block text-sm font-semibold text-white mt-2' }, [text]);
+}
+
+
+function makeRadioCard(label, desc, selected, onClick) {
+  return el('div', {
+    className: `flex-1 rounded-lg border-2 p-3 cursor-pointer transition ${selected ? 'border-mtg-gold bg-mtg-gold/10' : 'border-mtg-border hover:border-mtg-dim'}`,
+    onClick
+  }, [
+    el('div', { className: 'font-semibold text-sm ' + (selected ? 'text-mtg-gold' : 'text-white') }, [label]),
+    el('div', { className: 'text-xs text-mtg-dim mt-1' }, [desc])
+  ]);
+}
+
+function makeInfoBox(title, why, how, achieves) {
+  const details = el('details', { className: 'info-box rounded-lg border border-mtg-border p-4 mb-6' });
+  const summary = el('summary', { className: 'text-sm font-semibold text-mtg-gold select-none' }, [title]);
+  details.appendChild(summary);
+  const content = el('div', { className: 'mt-3 space-y-3 text-xs leading-relaxed' });
+
+  const whyBlock = el('div', {});
+  whyBlock.appendChild(el('div', { className: 'font-semibold text-white mb-0.5' }, ['Why this step matters']));
+  whyBlock.appendChild(el('div', { className: 'text-mtg-dim' }, [why]));
+  content.appendChild(whyBlock);
+
+  const howBlock = el('div', {});
+  howBlock.appendChild(el('div', { className: 'font-semibold text-white mb-0.5' }, ['How to get the best results']));
+  howBlock.appendChild(el('div', { className: 'text-mtg-dim' }, [how]));
+  content.appendChild(howBlock);
+
+  const achieveBlock = el('div', {});
+  achieveBlock.appendChild(el('div', { className: 'font-semibold text-white mb-0.5' }, ['What this achieves']));
+  achieveBlock.appendChild(el('div', { className: 'text-mtg-dim' }, [achieves]));
+  content.appendChild(achieveBlock);
+
+  details.appendChild(content);
+  return details;
+}
+
+function makeFeedbackBox(stepName, prompt) {
+  const div = el('div', { className: 'mt-6 rounded-lg border border-mtg-border p-4 bg-mtg-panel' });
+  div.appendChild(el('div', { className: 'text-xs font-semibold text-mtg-gold mb-2' }, ['Beta Feedback']));
+  div.appendChild(el('p', { className: 'text-xs text-mtg-dim mb-2' }, [prompt]));
+  const ta = el('textarea', { className: 'w-full rounded border px-3 py-2 text-sm h-16 resize-none', placeholder: 'Your thoughts...' });
+  ta.value = STATE.feedback[stepName] || '';
+  ta.addEventListener('input', e => STATE.feedback[stepName] = e.target.value);
+  div.appendChild(ta);
+  return div;
+}
+
+// ============================================================
+// STEP 3: CATEGORIZE
+// ============================================================
+function renderCategorize() {
+  // Auto-assign uncategorized cards to SA categories based on Step 2 definitions
+  autoAssignSACategories();
+
+  const app = $('#app');
+  const container = el('div', { className: 'fade-in' });
+  const cs = STATE.characterSheet;
+
+  container.appendChild(el('h2', { className: 'font-cinzel text-2xl text-mtg-gold mb-2' }, ['Card Categorization']));
+  container.appendChild(el('p', { className: 'text-mtg-dim text-sm mb-4' }, ['Auto-filled from deck analysis. Review and adjust — click any card name to see the full card.']));
+
+  container.appendChild(makeInfoBox(
+    'Guide: Categorizing Your Cards',
+    'Manabot Insights splits your 99 into strict category ratios backed by hypergeometric probability. Velocity (card draw) at 18 ensures you see 1+ draw spells per opening hand. Ramp at 12-15 keeps you on curve. Interaction at 9-15 gives you answers without drowning in reactive cards. Your 5 Secondary Abilities fill the remaining slots with cards that directly support your strategy. Every card must have a role — uncategorized cards are the #1 indicator of deck unfocus.',
+    'Most cards are auto-categorized from oracle text analysis. Review the auto-fill and adjust where needed — the tool catches obvious Ramp/Velocity/Interaction, but you know your deck\'s context better. Give every card a primary category. For dual-purpose cards (e.g., a ramp spell that also creates tokens), set a secondary category too — these "bridge cards" are what make a deck feel interconnected. Watch the ratio dashboard at the top for real-time feedback.',
+    'A fully categorized deck unlocks the Cross-Category Pollination metric in Step 5. Cards with both primary and secondary categories automatically score a point on the Dual-Category finger in Step 4. The ratio dashboard tells you exactly where your deck is over- or under-invested.'
+  ));
+
+  // SA Legend — only show SAs that have names defined
+  const legend = el('div', { className: 'flex flex-wrap gap-2 mb-4' });
+  CATEGORIES.filter(c => c !== 'Land').forEach(cat => {
+    // Skip unnamed SAs in the legend
+    if (cat.startsWith('SA-') && !cs.saNames[parseInt(cat.split('-')[1])-1]) return;
+    const label = catDisplayName(cat);
+    legend.appendChild(el('span', { className: 'cat-pill', style: `background:${CAT_COLORS[cat]}22; color:${CAT_COLORS[cat]}; border:1px solid ${CAT_COLORS[cat]}44` }, [label]));
+  });
+  container.appendChild(legend);
+
+  // Ratio Dashboard — bracket-aware targets
+  const counts = calcCategoryCounts();
+  const profile = getProfile();
+  const landRec = recommendedLands();
+  const targets = {
+    Velocity: `${profile.velocity[0]}-${profile.velocity[1]}`,
+    Ramp: `${profile.ramp[0]}-${profile.ramp[1]}`,
+    Interaction: `${profile.interaction[0]}-${profile.interaction[1]}`,
+    Wipe: `${profile.wipe[0]}-${profile.wipe[1]}`,
+    Land: `${profile.lands[0]}-${profile.lands[1]}`
+  };
+  const ratioBar = el('div', { className: 'grid grid-cols-5 gap-2 mb-4 p-3 rounded-lg bg-mtg-panel border border-mtg-border' });
+  const bracketMins = {
+    Velocity: profile.velocity[0], Ramp: profile.ramp[0],
+    Interaction: profile.interaction[0], Wipe: profile.wipe[0], Land: profile.lands[0]
+  };
+  const bracketMaxes = {
+    Velocity: profile.velocity[1], Ramp: profile.ramp[1],
+    Interaction: profile.interaction[1], Wipe: profile.wipe[1], Land: profile.lands[1]
+  };
+  ['Velocity','Ramp','Interaction','Wipe','Land'].forEach(cat => {
+    const t = targets[cat];
+    const min = bracketMins[cat];
+    const max = bracketMaxes[cat];
+    const count = counts[cat];
+    const isLow = count < min;
+    const isHigh = count > max;
+    const colorCls = isLow ? 'text-red-400' : isHigh ? 'text-yellow-400' : 'text-green-400';
+    ratioBar.appendChild(el('div', { className: 'text-center' }, [
+      el('div', { className: 'text-xs text-mtg-dim' }, [cat]),
+      el('div', { className: `text-lg font-bold ${colorCls}` }, [String(count)]),
+      el('div', { className: 'text-xs text-mtg-dim' }, [`target: ${t}`])
+    ]));
+  });
+  container.appendChild(ratioBar);
+
+  // Smart land recommendation
+  if (STATE.characterSheet.bracket) {
+    const landRec = recommendedLands();
+    const currentLands = counts['Land'] || 0;
+    const landDiff = currentLands - landRec.recommended;
+    const landColor = landDiff < -2 ? 'border-red-500/30 bg-red-500/5' : landDiff > 2 ? 'border-yellow-500/30 bg-yellow-500/5' : 'border-green-500/30 bg-green-500/5';
+    const landMsg = landDiff < -2
+      ? `You have ${currentLands} lands — ${Math.abs(landDiff)} below the recommended ${landRec.recommended}. With avg MV ${landRec.avgMV} and ${landRec.rampCount} ramp sources, you may miss land drops.`
+      : landDiff > 2
+        ? `You have ${currentLands} lands — ${landDiff} above the recommended ${landRec.recommended}. With avg MV ${landRec.avgMV} and ${landRec.rampCount} ramp sources, you could convert some land slots to spells.`
+        : `${currentLands} lands is on target (recommended: ${landRec.recommended} for your bracket, MV curve, and ramp density).`;
+    const landBox = el('div', { className: `rounded-lg border ${landColor} p-3 mb-4 text-xs` });
+    landBox.appendChild(el('div', { className: 'font-semibold text-white mb-0.5' }, ['Land Recommendation']));
+    landBox.appendChild(el('div', { className: 'text-mtg-dim' }, [landMsg]));
+    container.appendChild(landBox);
+  }
+
+  // Card Table
+  const nonLand = getNonLandCards();
+  const table = el('div', { className: 'space-y-1' });
+
+  // Header
+  const header = el('div', { className: 'grid grid-cols-12 gap-2 px-3 py-2 text-xs font-semibold text-mtg-dim border-b border-mtg-border' });
+  header.appendChild(el('div', { className: 'col-span-4' }, ['Card']));
+  header.appendChild(el('div', { className: 'col-span-1 text-center' }, ['MV']));
+  header.appendChild(el('div', { className: 'col-span-2' }, ['Type']));
+  header.appendChild(el('div', { className: 'col-span-2' }, ['Primary']));
+  header.appendChild(el('div', { className: 'col-span-2' }, ['Secondary']));
+  header.appendChild(el('div', { className: 'col-span-1 text-center' }, ['Info']));
+  table.appendChild(header);
+
+  nonLand.forEach(c => {
+    const sd = STATE.scryfallData[c.name];
+    if (!STATE.categories[c.name]) STATE.categories[c.name] = { primary: '', secondary: '' };
+    const cat = STATE.categories[c.name];
+
+    const row = el('div', { className: 'grid grid-cols-12 gap-2 px-3 py-2 rounded card-hover border border-transparent items-center text-sm' });
+
+    // Name
+    const nameEl = el('div', { className: 'col-span-4 cursor-pointer hover:text-mtg-gold truncate', onClick: () => showCardModal(c.name) }, [c.name]);
+    row.appendChild(nameEl);
+
+    // MV
+    row.appendChild(el('div', { className: 'col-span-1 text-center text-mtg-dim' }, [sd ? String(sd.cmc) : '?']));
+
+    // Type
+    const shortType = sd ? sd.type_line.replace(/Legendary\s*/i, '').split('—')[0].trim() : '';
+    row.appendChild(el('div', { className: 'col-span-2 text-xs text-mtg-dim truncate' }, [shortType]));
+
+    // Build list of available categories (core + named SAs only)
+    const availableCats = CATEGORIES.filter(ct => {
+      if (ct === 'Land') return false;
+      if (ct.startsWith('SA-')) return !!cs.saNames[parseInt(ct.split('-')[1])-1]; // only named SAs
+      return true;
+    });
+
+    // Primary Category
+    const priSelect = el('select', { className: 'col-span-2 rounded border px-1 py-1 text-xs' });
+    priSelect.appendChild(el('option', { value: '' }, ['— Select —']));
+    availableCats.forEach(ct => {
+      const opt = el('option', { value: ct }, [catDisplayName(ct)]);
+      if (cat.primary === ct) opt.selected = true;
+      priSelect.appendChild(opt);
+    });
+    priSelect.addEventListener('change', e => { cat.primary = e.target.value; STATE.userEdited[c.name] = true; render(); });
+    row.appendChild(priSelect);
+
+    // Secondary Category
+    const secSelect = el('select', { className: 'col-span-2 rounded border px-1 py-1 text-xs' });
+    secSelect.appendChild(el('option', { value: '' }, ['— None —']));
+    availableCats.forEach(ct => {
+      const opt = el('option', { value: ct }, [catDisplayName(ct)]);
+      if (cat.secondary === ct) opt.selected = true;
+      secSelect.appendChild(opt);
+    });
+    secSelect.addEventListener('change', e => { cat.secondary = e.target.value; STATE.userEdited[c.name] = true; render(); });
+    row.appendChild(secSelect);
+
+    // Info button (shows oracle text)
+    const infoBtn = el('div', { className: 'col-span-1 text-center' });
+    const oBtn = el('button', {
+      className: 'text-mtg-dim hover:text-mtg-gold text-xs',
+      onClick: () => showCardModal(c.name)
+    }, ['View']);
+    infoBtn.appendChild(oBtn);
+    row.appendChild(infoBtn);
+
+    table.appendChild(row);
+  });
+
+  container.appendChild(table);
+  container.appendChild(makeFeedbackBox('categorize', 'How does the categorization process feel? Too tedious? Missing options? Confusing categories?'));
+  container.appendChild(navButtons(true, true));
+  app.appendChild(container);
+}
+
+// ============================================================
+// STEP 4: 5-FINGER SCORING
+// ============================================================
+function renderScore() {
+  // Re-run intelligent auto-scoring with full character sheet context
+  // Only overwrite cards the user hasn't manually edited
+  if (!STATE.fingerEdited) STATE.fingerEdited = {};
+  getNonLandCards().forEach(c => {
+    if (!STATE.fingerEdited[c.name]) {
+      STATE.fingers[c.name] = autoScoreFingers(c.name);
+    }
+  });
+
+  const app = $('#app');
+  const container = el('div', { className: 'fade-in' });
+  const cs = STATE.characterSheet;
+
+  container.appendChild(el('h2', { className: 'font-cinzel text-2xl text-mtg-gold mb-2' }, ['5-Finger Quick Check']));
+  container.appendChild(el('p', { className: 'text-mtg-dim text-sm mb-4' }, ['Auto-scored from deck analysis. Review and adjust — click any score to toggle it.']));
+
+  container.appendChild(makeInfoBox(
+    'Guide: The 5-Finger Quick Check',
+    'The 5-Finger score is the card-level metric that feeds every SWP dimension. Commander Signal (CS) drives Signal Density. Dual-Category (DC) drives Cross-Category Pollination. Independent Value (IV) drives Commander Independence. Web Connected (WC) measures how many specific cards each card interacts with — hubs vs. islands. Temporal Fit (TF) checks whether the card is deployable on curve. A card scoring 1-2 out of 5 is a cut candidate. A card scoring 4-5 is load-bearing.',
+    'CS, DC, IV, and TF are partially auto-scored from deck analysis. WC (Web Connected) is the hardest to auto-detect and requires your judgment — ask yourself: "Does this card meaningfully interact with 5+ other specific non-land cards in the deck?" If yes, score it 1. IV uses a 3-point scale: 0 = dead without commander, 0.5 = functional but diminished, 1 = fully independent. Click each score button to toggle.',
+    'Your 5-Finger averages determine the SWP grades in Step 5 and surface your bottom-10 cut candidates. The running average at the top gives you a real-time "engine health" readout — below 2.0 is Synergy Soup, above 3.5 is a focused engine.'
+  ));
+
+  // Legend
+  const legendBox = el('div', { className: 'grid grid-cols-5 gap-2 mb-4 p-3 rounded-lg bg-mtg-panel border border-mtg-border text-xs' });
+  const fingerDefs = [
+    ['CS', 'Commander Signal', 'Directly interacts with commander\'s Primary Ability?', '0/1'],
+    ['DC', 'Dual-Category', 'Serves 2+ framework categories?', '0/1'],
+    ['WC', 'Web Connected', 'Interacts with 5+ other specific cards?', '0/1'],
+    ['IV', 'Independent Value', 'Functions without commander?', '0/0.5/1'],
+    ['TF', 'Temporal Fit', 'Playable on curve within deployment window?', '0/1'],
+  ];
+  fingerDefs.forEach(([code, name, desc, scale]) => {
+    legendBox.appendChild(el('div', {}, [
+      el('div', { className: 'font-bold text-white' }, [`${code}`]),
+      el('div', { className: 'text-mtg-dim' }, [desc]),
+      el('div', { className: 'text-mtg-gold mt-0.5' }, [`(${scale})`])
+    ]));
+  });
+  container.appendChild(legendBox);
+
+  // Running avg
+  const avg = calcFingerAverages();
+  const avgLabel = parseFloat(avg) <= 1.5 ? 'Synergy Soup' : parseFloat(avg) <= 2.5 ? 'Standard' : parseFloat(avg) <= 3.5 ? 'Focused' : parseFloat(avg) <= 4.5 ? 'Engine Online' : 'Inevitability Machine';
+  container.appendChild(el('div', { className: 'mb-4 text-sm' }, [
+    el('span', { className: 'text-mtg-dim' }, ['Running Average: ']),
+    el('span', { className: 'text-mtg-gold font-bold text-lg' }, [avg]),
+    el('span', { className: 'text-mtg-dim ml-2' }, [`— ${avgLabel}`])
+  ]));
+
+  // Table
+  const nonLand = getNonLandCards();
+  const table = el('div', { className: 'space-y-1' });
+
+  // Header
+  const header = el('div', { className: 'grid grid-cols-12 gap-2 px-3 py-2 text-xs font-semibold text-mtg-dim border-b border-mtg-border' });
+  header.appendChild(el('div', { className: 'col-span-4' }, ['Card']));
+  header.appendChild(el('div', { className: 'col-span-1 text-center' }, ['Cat']));
+  ['CS','DC','WC','IV','TF'].forEach(f => {
+    header.appendChild(el('div', { className: 'col-span-1 text-center' }, [f]));
+  });
+  header.appendChild(el('div', { className: 'col-span-2 text-center' }, ['Total']));
+  table.appendChild(header);
+
+  nonLand.forEach(c => {
+    if (!STATE.fingers[c.name]) STATE.fingers[c.name] = { cs: 0, dc: 0, wc: 0, iv: 0, tf: 0 };
+    const f = STATE.fingers[c.name];
+    const cat = STATE.categories[c.name]?.primary || '';
+    const total = (f.cs + f.dc + f.wc + f.iv + f.tf).toFixed(1);
+
+    const row = el('div', { className: 'grid grid-cols-12 gap-2 px-3 py-1.5 rounded card-hover border border-transparent items-center text-sm' });
+
+    // Name
+    row.appendChild(el('div', {
+      className: 'col-span-4 cursor-pointer hover:text-mtg-gold truncate text-xs',
+      onClick: () => showCardModal(c.name)
+    }, [c.name]));
+
+    // Category pill
+    const catPill = el('div', { className: 'col-span-1 text-center' });
+    if (cat) {
+      const label = catDisplayName(cat).slice(0, 12);
+      catPill.appendChild(el('span', { className: 'cat-pill', style: `background:${CAT_COLORS[cat]}33; color:${CAT_COLORS[cat]}` }, [label]));
+    }
+    row.appendChild(catPill);
+
+    // Score buttons
+    ['cs','dc','wc','iv','tf'].forEach(key => {
+      const cell = el('div', { className: 'col-span-1 text-center' });
+      if (key === 'iv') {
+        // Tri-state: 0 → 0.5 → 1 → 0
+        const btn = el('button', {
+          className: `score-btn rounded px-2 py-1 text-xs border border-mtg-border ${f[key] > 0 ? 'selected' : 'text-mtg-dim'}`,
+          onClick: () => { f[key] = f[key] === 0 ? 0.5 : f[key] === 0.5 ? 1 : 0; STATE.fingerEdited[c.name] = true; render(); }
+        }, [String(f[key])]);
+        cell.appendChild(btn);
+      } else {
+        const btn = el('button', {
+          className: `score-btn rounded px-2 py-1 text-xs border border-mtg-border ${f[key] ? 'selected' : 'text-mtg-dim'}`,
+          onClick: () => { f[key] = f[key] ? 0 : 1; STATE.fingerEdited[c.name] = true; render(); }
+        }, [String(f[key])]);
+        cell.appendChild(btn);
+      }
+      row.appendChild(cell);
+    });
+
+    // Total
+    const totalColor = parseFloat(total) >= 3.6 ? 'text-green-400' : parseFloat(total) >= 2.6 ? 'text-mtg-gold' : parseFloat(total) >= 1.6 ? 'text-mtg-dim' : 'text-red-400';
+    row.appendChild(el('div', { className: `col-span-2 text-center font-bold ${totalColor}` }, [total]));
+
+    table.appendChild(row);
+  });
+
+  container.appendChild(table);
+  container.appendChild(makeFeedbackBox('scoring', 'How does the 5-Finger scoring feel? Are the definitions clear? Is any finger hard to evaluate?'));
+  container.appendChild(navButtons(true, true));
+  app.appendChild(container);
+}
+
+// ============================================================
+// STEP 5: RESULTS
+// ============================================================
+function renderResults() {
+  const app = $('#app');
+  const container = el('div', { className: 'fade-in' });
+
+  container.appendChild(el('h2', { className: 'font-cinzel text-2xl text-mtg-gold mb-2' }, ['Synergy Web Protocol — Results']));
+  container.appendChild(el('p', { className: 'text-mtg-dim text-sm mb-4' }, ['Your deck\'s synergy profile based on the 5-Finger data and framework categorization.']));
+
+  container.appendChild(makeInfoBox(
+    'Guide: Reading Your SWP Profile',
+    'The Synergy Web Protocol measures deck synergy across multiple dimensions, not a single number. Signal Density (SD) tells you how focused the deck is on its game plan. Commander Independence (CI) reveals whether the deck collapses without its commander — the "Top-Down Trap." Cross-Category Pollination (CCP) measures interconnectedness — how many cards serve double duty across framework categories. These three metrics are independent and can tell different stories: a deck can have high SD but low CCP (focused but linear) or high CCP but low SD (interconnected but unfocused).',
+    'Look at each grade and ask: does this match how the deck FEELS when you play it? If SD is low but the deck performs well, you may have mis-scored CS on some cards. If CI is high but you feel helpless without your commander, some IV scores may be too generous. The diagnostic flags at the bottom detect specific failure patterns (Pillars of Failure) — each one includes a concrete description of the problem and what ratio is off.',
+    'A complete SWP profile gives you a structural map of your deck\'s strengths and weaknesses. The bottom-10 cut list identifies the weakest links. The diagnostic flags highlight systemic issues. Together, they tell you not just "this deck needs work" but exactly WHERE and WHY — which is what separates this from generic synergy scores.'
+  ));
+
+  const cs = STATE.characterSheet;
+
+  // Character Sheet Summary
+  const summaryBox = el('div', { className: 'rounded-lg border border-mtg-border p-4 mb-6 bg-mtg-panel' });
+  summaryBox.appendChild(el('div', { className: 'font-cinzel text-lg text-white mb-2' }, [cs.commanderName || 'Unknown Commander']));
+  const summaryGrid = el('div', { className: 'grid grid-cols-2 gap-x-4 gap-y-1 text-xs' });
+  summaryGrid.appendChild(el('div', { className: 'text-mtg-dim' }, ['Bracket']));
+  summaryGrid.appendChild(el('div', { className: 'text-white' }, [cs.bracket ? BRACKET_PROFILES[cs.bracket].label : '—']));
+  summaryGrid.appendChild(el('div', { className: 'text-mtg-dim' }, ['Axis']));
+  summaryGrid.appendChild(el('div', { className: 'text-white capitalize' }, [cs.axis || '—']));
+  summaryGrid.appendChild(el('div', { className: 'text-mtg-dim' }, ['Threat Level']));
+  summaryGrid.appendChild(el('div', { className: 'text-white capitalize' }, [cs.threatLevel || '—']));
+  summaryGrid.appendChild(el('div', { className: 'text-mtg-dim' }, ['Wins By']));
+  summaryGrid.appendChild(el('div', { className: 'text-white' }, [cs.winsBy || '—']));
+  summaryBox.appendChild(summaryGrid);
+  container.appendChild(summaryBox);
+
+  // SWP Dimensional Scores — cards with grades
+  const sd = parseFloat(calcSD());
+  const ci = parseFloat(calcCI());
+  const ccp = parseFloat(calcCCP());
+  const sdG = getSDGrade(sd), ciG = getCIGrade(ci), ccpG = getCCPGrade(ccp);
+
+  const dimGrid = el('div', { className: 'grid grid-cols-3 gap-4 mb-6' });
+
+  // SD
+  dimGrid.appendChild(makeDimCard('Signal Density', sd, sdG,
+    'What % of non-land cards directly interact with the commander\'s Primary Ability?'));
+  // CI
+  dimGrid.appendChild(makeDimCard('Commander Independence', ci, ciG,
+    'How well does the deck function if the commander is permanently removed?'));
+  // CCP
+  dimGrid.appendChild(makeDimCard('Cross-Category Pollination', ccp, ccpG,
+    'What % of non-land cards serve more than one framework category?'));
+
+  container.appendChild(dimGrid);
+
+  // SWP Radar Chart & Tier Badge
+  const radarSection = el('div', { className: 'rounded-lg border border-mtg-border p-6 mb-6 bg-mtg-panel text-center' });
+  radarSection.appendChild(el('h3', { className: 'font-cinzel text-lg text-mtg-gold mb-4' }, ['SWP Profile']));
+
+  const canvasContainer = el('div', { style: 'display:flex;justify-content:center;margin-bottom:1.5rem' });
+  const canvas = el('canvas', { id: 'swp-radar', width: '320', height: '320' });
+  canvasContainer.appendChild(canvas);
+  radarSection.appendChild(canvasContainer);
+
+  // Draw radar chart after adding to DOM
+  setTimeout(() => {
+    drawRadarChart(canvas, { sd, ci, ccp, ed: 0, ri: 0 });
+  }, 10);
+
+  // Tier badge
+  const tierInfo = getTierBadgeInfo();
+  const badgeBox = el('div', { className: 'rounded-lg border-2 p-4 mt-4', style: `border-color:${tierInfo.tierColor};background:${tierInfo.tierBgColor}` });
+  badgeBox.appendChild(el('div', { className: 'text-sm text-mtg-dim mb-1' }, ['5-Finger Score']));
+  badgeBox.appendChild(el('div', { className: 'text-3xl font-bold mb-2', style: `color:${tierInfo.tierColor}` }, [tierInfo.avgFinger]));
+  badgeBox.appendChild(el('div', { className: 'text-xs text-mtg-dim mb-3' }, [cs.bracket ? BRACKET_PROFILES[cs.bracket].label : 'Bracket unknown']));
+  badgeBox.appendChild(el('div', { className: 'text-lg font-cinzel', style: `color:${tierInfo.tierColor}` }, [tierInfo.tier]));
+  if (tierInfo.tier === 'Inevitability Machine') {
+    badgeBox.style.boxShadow = `0 0 20px ${tierInfo.tierColor}40`;
+  }
+  radarSection.appendChild(badgeBox);
+
+  container.appendChild(radarSection);
+
+  // Category Counts
+  const counts = calcCategoryCounts();
+  container.appendChild(el('h3', { className: 'font-cinzel text-lg text-white mb-3' }, ['Framework Ratios']));
+  const ratioGrid = el('div', { className: 'grid grid-cols-5 gap-3 mb-6' });
+  const profile = getProfile();
+  const ratioTargets = {
+    Velocity: profile.velocity, Ramp: profile.ramp,
+    Interaction: profile.interaction, Wipe: profile.wipe, Land: profile.lands
+  };
+  Object.entries(ratioTargets).forEach(([cat, [min, max]]) => {
+    const count = counts[cat];
+    const ok = count >= min && count <= max;
+    const low = count < min;
+    const card = el('div', { className: 'rounded-lg border border-mtg-border p-3 bg-mtg-panel text-center' });
+    card.appendChild(el('div', { className: 'text-xs text-mtg-dim mb-1' }, [cat]));
+    card.appendChild(el('div', { className: `text-2xl font-bold ${low ? 'text-red-400' : ok ? 'text-green-400' : 'text-yellow-400'}` }, [String(count)]));
+    card.appendChild(el('div', { className: 'text-xs text-mtg-dim' }, [`target: ${min}${min !== max ? '-'+max : ''}`]));
+    ratioGrid.appendChild(card);
+  });
+  container.appendChild(ratioGrid);
+
+  // SA Counts
+  const saGrid = el('div', { className: 'grid grid-cols-5 gap-3 mb-6' });
+  for (let i = 1; i <= 5; i++) {
+    const cat = `SA-${i}`;
+    const label = catDisplayName(cat);
+    const count = counts[cat] || 0;
+    const card = el('div', { className: 'rounded-lg border border-mtg-border p-3 bg-mtg-panel text-center' });
+    card.appendChild(el('div', { className: 'text-xs truncate', style: `color:${CAT_COLORS[cat]}` }, [label]));
+    card.appendChild(el('div', { className: 'text-2xl font-bold text-white' }, [String(count)]));
+    saGrid.appendChild(card);
+  }
+  container.appendChild(saGrid);
+
+  // Avg MV
+  const avgMV = calcAvgMV();
+  container.appendChild(el('div', { className: 'mb-6 p-3 rounded-lg border border-mtg-border bg-mtg-panel flex items-center justify-between' }, [
+    el('span', { className: 'text-sm text-mtg-dim' }, ['Average Non-Land Mana Value']),
+    el('span', { className: `text-xl font-bold ${parseFloat(avgMV) > 2.5 ? 'text-red-400' : parseFloat(avgMV) > 2.2 ? 'text-yellow-400' : 'text-green-400'}` }, [avgMV]),
+  ]));
+
+  // 5-Finger Average
+  const avgFinger = calcFingerAverages();
+  const fingerLabel = parseFloat(avgFinger) <= 1.5 ? 'Synergy Soup' : parseFloat(avgFinger) <= 2.5 ? 'Standard' : parseFloat(avgFinger) <= 3.5 ? 'Focused' : parseFloat(avgFinger) <= 4.5 ? 'Engine Online' : 'Inevitability Machine';
+  container.appendChild(el('div', { className: 'mb-6 p-3 rounded-lg border border-mtg-border bg-mtg-panel flex items-center justify-between' }, [
+    el('span', { className: 'text-sm text-mtg-dim' }, ['Average 5-Finger Score']),
+    el('div', {}, [
+      el('span', { className: 'text-xl font-bold text-mtg-gold mr-2' }, [avgFinger]),
+      el('span', { className: 'text-sm text-mtg-dim' }, [fingerLabel])
+    ])
+  ]));
+
+  // Pillar Flags
+  const flags = checkPillars();
+  container.appendChild(el('h3', { className: 'font-cinzel text-lg text-white mb-3' }, ['Diagnostic Flags']));
+  if (flags.length === 0) {
+    container.appendChild(el('div', { className: 'p-3 rounded-lg border border-green-500/30 bg-green-500/5 text-green-400 text-sm mb-6' }, ['No flags detected. Framework ratios look healthy.']));
+  } else {
+    const flagList = el('div', { className: 'space-y-2 mb-6' });
+    flags.forEach(f => {
+      const card = el('div', { className: 'p-3 rounded-lg border border-red-500/30 bg-red-500/5' });
+      card.appendChild(el('div', { className: 'text-sm font-semibold text-red-400' }, [f.pillar ? `Pillar ${f.pillar}: ${f.label}` : f.label]));
+      card.appendChild(el('div', { className: 'text-xs text-mtg-dim mt-1' }, [f.msg]));
+      flagList.appendChild(card);
+    });
+    container.appendChild(flagList);
+  }
+
+  // Bottom-10 Cut List — cards with lowest 5-Finger scores
+  const nonLand = getNonLandCards();
+  const scored = nonLand.filter(c => STATE.fingers[c.name]).map(c => ({
+    name: c.name,
+    total: Object.values(STATE.fingers[c.name]).reduce((a,b) => a+b, 0),
+    cat: STATE.categories[c.name]?.primary || '',
+    mv: STATE.scryfallData[c.name]?.cmc ?? '?'
+  })).sort((a, b) => a.total - b.total);
+
+  container.appendChild(el('h3', { className: 'font-cinzel text-lg text-white mb-3' }, ['Bottom 10 — Cut Candidates']));
+  if (scored.length > 0) {
+    container.appendChild(el('p', { className: 'text-xs text-mtg-dim mb-3' }, ['These cards scored lowest on the 5-Finger check. Consider whether each one truly earns its slot, or whether a higher-synergy replacement exists.']));
+    const cutTable = el('div', { className: 'space-y-1 mb-6' });
+    const cutHeader = el('div', { className: 'grid grid-cols-12 gap-2 px-3 py-1.5 text-xs font-semibold text-mtg-dim border-b border-mtg-border' });
+    cutHeader.appendChild(el('div', { className: 'col-span-1' }, ['#']));
+    cutHeader.appendChild(el('div', { className: 'col-span-5' }, ['Card']));
+    cutHeader.appendChild(el('div', { className: 'col-span-2' }, ['Category']));
+    cutHeader.appendChild(el('div', { className: 'col-span-2 text-center' }, ['MV']));
+    cutHeader.appendChild(el('div', { className: 'col-span-2 text-center' }, ['Score']));
+    cutTable.appendChild(cutHeader);
+
+    scored.slice(0, 10).forEach((c, i) => {
+      const row = el('div', { className: 'grid grid-cols-12 gap-2 px-3 py-1.5 rounded card-hover border border-transparent items-center text-sm' });
+      row.appendChild(el('div', { className: 'col-span-1 text-xs text-mtg-dim' }, [String(i + 1)]));
+      row.appendChild(el('div', { className: 'col-span-5 cursor-pointer hover:text-mtg-gold truncate', onClick: () => showCardModal(c.name) }, [c.name]));
+      const catLabel = catDisplayName(c.cat);
+      const catColor = CAT_COLORS[c.cat] || '#8b92a8';
+      row.appendChild(el('div', { className: 'col-span-2' }, [
+        catLabel ? el('span', { className: 'cat-pill', style: `background:${catColor}33; color:${catColor}` }, [catLabel]) : el('span', { className: 'text-xs text-mtg-dim' }, ['—'])
+      ]));
+      row.appendChild(el('div', { className: 'col-span-2 text-center text-mtg-dim' }, [String(c.mv)]));
+      const scoreColor = c.total <= 1.5 ? 'text-red-400' : c.total <= 2.5 ? 'text-yellow-400' : 'text-mtg-dim';
+      row.appendChild(el('div', { className: `col-span-2 text-center font-bold ${scoreColor}` }, [c.total.toFixed(1)]));
+      cutTable.appendChild(row);
+    });
+    container.appendChild(cutTable);
+  }
+
+  container.appendChild(makeFeedbackBox('results', 'Do these results feel accurate? Any scores that surprise you? What\'s missing from the analysis?'));
+  container.appendChild(navButtons(true, true, 'Export & Finish'));
+  app.appendChild(container);
+}
+
+function makeDimCard(title, pct, grade, desc) {
+  const card = el('div', { className: 'rounded-lg border border-mtg-border p-4 bg-mtg-panel' });
+  card.appendChild(el('div', { className: 'text-xs text-mtg-dim mb-2' }, [title]));
+  const row = el('div', { className: 'flex items-end gap-2 mb-2' });
+  row.appendChild(el('div', { className: 'text-3xl font-bold', style: `color:${gradeColor(grade)}` }, [grade]));
+  row.appendChild(el('div', { className: 'text-lg text-mtg-dim mb-1' }, [`${pct}%`]));
+  card.appendChild(row);
+  // Bar
+  const bar = el('div', { className: 'h-2 rounded-full bg-mtg-border overflow-hidden mb-2' });
+  bar.appendChild(el('div', { className: 'h-full rounded-full transition-all', style: `width:${Math.min(pct, 100)}%; background:${gradeColor(grade)}` }));
+  card.appendChild(bar);
+  card.appendChild(el('div', { className: 'text-xs text-mtg-dim' }, [desc]));
+  return card;
+}
+
+// ============================================================
+// STEP 6: EXPORT & FEEDBACK
+// ============================================================
+function renderExport() {
+  const app = $('#app');
+  const container = el('div', { className: 'fade-in max-w-3xl mx-auto' });
+
+  container.appendChild(el('h2', { className: 'font-cinzel text-2xl text-mtg-gold mb-2' }, ['Export & Feedback']));
+  container.appendChild(el('p', { className: 'text-mtg-dim text-sm mb-4' }, ['Download your full audit data and share your feedback to help improve the methodology.']));
+
+  container.appendChild(makeInfoBox(
+    'Guide: Exporting & Sharing Feedback',
+    'Your audit data and feedback are what make this methodology better. The JSON export contains every data point — card-level scores, SWP dimensions, category assignments — which can be used to compare decks over time or shared for collaborative deck building. The text report is a human-readable snapshot you can paste into Discord, a blog post, or share with your playgroup.',
+    'Download the JSON for a complete audit record. Use the text report or clipboard copy for quick sharing. Most importantly: fill in the feedback boxes on this page and on any earlier steps. Be specific — "Step 3 was confusing" is less helpful than "I didn\'t know whether Beast Within should be Interaction primary or SA-2 primary." Your feedback directly shapes the next version of the tool and the methodology itself.',
+    'Exported audit files let you track how your deck evolves over time — re-audit after making cuts and compare your SWP scores. The feedback you provide helps calibrate auto-categorization accuracy, refine the 5-Finger definitions, and improve the diagnostic flags for future versions.'
+  ));
+
+  // Export JSON
+  const jsonBtn = el('button', {
+    className: 'w-full mb-3 px-5 py-3 rounded-lg border border-mtg-gold text-mtg-gold hover:bg-mtg-gold/10 transition text-sm font-semibold',
+    onClick: () => {
+      const exportData = {
+        version: '0.1-beta',
+        exportDate: new Date().toISOString(),
+        characterSheet: STATE.characterSheet,
+        cards: STATE.parsedCards.map(c => ({
+          name: c.name,
+          qty: c.qty,
+          isCommander: c.isCommander,
+          mv: STATE.scryfallData[c.name]?.cmc,
+          type: STATE.scryfallData[c.name]?.type_line,
+          category: STATE.categories[c.name] || {},
+          fingers: STATE.fingers[c.name] || {},
+          fingerTotal: STATE.fingers[c.name] ? Object.values(STATE.fingers[c.name]).reduce((a,b) => a+b, 0) : 0
+        })),
+        results: {
+          signalDensity: calcSD(),
+          commanderIndependence: calcCI(),
+          crossCategoryPollination: calcCCP(),
+          avgMV: calcAvgMV(),
+          avgFingerScore: calcFingerAverages(),
+          categoryCounts: calcCategoryCounts(),
+          pillarFlags: checkPillars()
+        },
+        feedback: STATE.feedback
+      };
+      const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${STATE.characterSheet.commanderName || 'deck'}_audit.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+  }, ['Download Full Audit (JSON)']);
+  container.appendChild(jsonBtn);
+
+  // Export Text Report
+  const textBtn = el('button', {
+    className: 'w-full mb-6 px-5 py-3 rounded-lg border border-mtg-border text-mtg-dim hover:text-white hover:border-mtg-gold transition text-sm',
+    onClick: () => {
+      const cs = STATE.characterSheet;
+      const sd = calcSD(), ci = calcCI(), ccp = calcCCP();
+      const counts = calcCategoryCounts();
+      let text = `MANABOT INSIGHTS AUDIT — ${cs.commanderName}\n`;
+      text += `${'='.repeat(50)}\n\n`;
+      text += `CHARACTER SHEET\n`;
+      text += `Commander: ${cs.commanderName}\n`;
+      text += `Bracket: ${cs.bracket ? BRACKET_PROFILES[cs.bracket].label : 'Not set'}\n`;
+      text += `Primary Ability: ${cs.primaryAbility}\n`;
+      text += `Axis: ${cs.axis}\n`;
+      text += `Threat Level: ${cs.threatLevel}\n`;
+      text += `Wins By: ${cs.winsBy}\n`;
+      for (let i = 0; i < 5; i++) { if (cs.saNames[i]) text += `${cs.saNames[i]}: ${cs.sa[i]}\n`; }
+      text += `\nSYNERGY PROFILE\n`;
+      text += `Signal Density: ${sd}% — ${getSDGrade(parseFloat(sd))}\n`;
+      text += `Commander Independence: ${ci}% — ${getCIGrade(parseFloat(ci))}\n`;
+      text += `Cross-Category Pollination: ${ccp}% — ${getCCPGrade(parseFloat(ccp))}\n`;
+      text += `\nFRAMEWORK RATIOS\n`;
+      Object.entries(counts).forEach(([cat, count]) => { if (cat === 'Land' || !cat.startsWith('SA-') || cs.saNames[parseInt(cat.split('-')[1])-1]) text += `${catDisplayName(cat)}: ${count}\n`; });
+      text += `\nAvg MV: ${calcAvgMV()}\n`;
+      text += `Avg 5-Finger: ${calcFingerAverages()}\n`;
+      text += `\nFLAGS\n`;
+      checkPillars().forEach(f => { text += `- ${f.label}: ${f.msg}\n`; });
+      text += `\nFEEDBACK\n`;
+      Object.entries(STATE.feedback).forEach(([k,v]) => { if (v) text += `[${k}]: ${v}\n`; });
+
+      const blob = new Blob([text], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${cs.commanderName || 'deck'}_audit.txt`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+  }, ['Download Text Report']);
+  container.appendChild(textBtn);
+
+  // Copy to clipboard
+  const copyBtn = el('button', {
+    className: 'w-full mb-6 px-5 py-3 rounded-lg border border-mtg-border text-mtg-dim hover:text-white hover:border-mtg-gold transition text-sm',
+    onClick: () => {
+      const cs = STATE.characterSheet;
+      const sd = calcSD(), ci = calcCI(), ccp = calcCCP();
+      let text = `**${cs.commanderName} — Manabot Insights Audit**\n`;
+      text += `Bracket: ${cs.bracket || '?'} | Axis: ${cs.axis} | Threat: ${cs.threatLevel}\n`;
+      text += `SD: ${sd}% (${getSDGrade(parseFloat(sd))}) | CI: ${ci}% (${getCIGrade(parseFloat(ci))}) | CCP: ${ccp}% (${getCCPGrade(parseFloat(ccp))})\n`;
+      text += `Avg MV: ${calcAvgMV()} | Avg 5-Finger: ${calcFingerAverages()}\n`;
+      const flags = checkPillars();
+      if (flags.length) text += `Flags: ${flags.map(f => f.label).join(', ')}\n`;
+      navigator.clipboard.writeText(text).then(() => {
+        copyBtn.textContent = 'Copied!';
+        setTimeout(() => { copyBtn.textContent = 'Copy Summary to Clipboard (for Discord/etc.)'; }, 2000);
+      });
+    }
+  }, ['Copy Summary to Clipboard (for Discord/etc.)']);
+  container.appendChild(copyBtn);
+
+  // Final Feedback
+  container.appendChild(el('h3', { className: 'font-cinzel text-lg text-white mb-3' }, ['Overall Feedback']));
+  container.appendChild(makeFeedbackBox('overall', 'Any final thoughts on Manabot Insights or the methodology? What would make this more useful?'));
+
+  container.appendChild(el('div', { className: 'mt-8 text-center text-xs text-mtg-dim' }, [
+    'Thank you for beta testing! Your feedback directly improves the methodology.'
+  ]));
+
+  container.appendChild(navButtons(true, false));
+  app.appendChild(container);
+}
+
+// ============================================================
+// INIT
+// ============================================================
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Manabot Insights — Start Here</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        mtg: { dark: '#0c0e14', panel: '#161924', border: '#2a2f3e', gold: '#d4a843', accent: '#f0c75e', dim: '#8b92a8' }
+      }
+    }
+  }
+}
+</script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Cinzel:wght@600;700&display=swap');
+body { font-family: 'Inter', sans-serif; background: #0c0e14; color: #e2e8f0; }
+h1, h2, h3, .font-cinzel { font-family: 'Cinzel', serif; }
+.glow { box-shadow: 0 0 30px #d4a84322, 0 0 60px #d4a84311; }
+.fade-up { animation: fadeUp 0.6s ease-out both; }
+.fade-up-d1 { animation-delay: 0.1s; }
+.fade-up-d2 { animation-delay: 0.2s; }
+.fade-up-d3 { animation-delay: 0.3s; }
+.fade-up-d4 { animation-delay: 0.4s; }
+.fade-up-d5 { animation-delay: 0.5s; }
+@keyframes fadeUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+.step-line::before { content: ''; position: absolute; left: 27px; top: 48px; bottom: -8px; width: 2px; background: #2a2f3e; }
+.step-line:last-child::before { display: none; }
+.dim-card { background: linear-gradient(135deg, #161924 0%, #1a1f30 100%); }
+
+/* Animated Hero Gradient */
+.hero-gradient {
+  background: radial-gradient(ellipse at 50% 0%, rgba(212, 168, 67, 0.12) 0%, rgba(212, 168, 67, 0.04) 35%, transparent 70%),
+              radial-gradient(ellipse at 20% 50%, rgba(168, 85, 247, 0.06) 0%, transparent 50%),
+              radial-gradient(ellipse at 80% 50%, rgba(59, 130, 246, 0.06) 0%, transparent 50%);
+  animation: heroShift 12s ease-in-out infinite alternate;
+}
+@keyframes heroShift {
+  0% {
+    background-position: 0% 0%, 0% 0%, 0% 0%;
+  }
+  50% {
+    background-position: 100% 100%, 50% 20%, 50% 80%;
+  }
+  100% {
+    background-position: 50% 50%, 100% 100%, 0% 100%;
+  }
+}
+
+/* Noise texture overlay */
+.hero-gradient::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    repeating-linear-gradient(
+      45deg,
+      transparent,
+      transparent 1px,
+      rgba(255, 255, 255, 0.03) 1px,
+      rgba(255, 255, 255, 0.03) 2px
+    );
+  pointer-events: none;
+  animation: noiseShift 0.5s steps(2) infinite;
+}
+@keyframes noiseShift {
+  0% { opacity: 0.5; }
+  100% { opacity: 0.7; }
+}
+
+/* Tier Card Styles */
+.tier-card {
+  background: linear-gradient(135deg, #161924 0%, #1a1f30 100%);
+  border: 1px solid #2a2f3e;
+  border-left: 4px solid;
+  position: relative;
+}
+.tier-card.synergy-soup { border-left-color: #ef4444; }
+.tier-card.standard { border-left-color: #eab308; }
+.tier-card.focused { border-left-color: #22c55e; }
+.tier-card.engine-online { border-left-color: #3b82f6; }
+.tier-card.inevitability-machine {
+  border-left-color: #a855f7;
+  box-shadow: 0 0 30px #a855f722, 0 0 60px #a855f711;
+}
+
+.tier-name {
+  font-family: 'Cinzel', serif;
+  font-weight: 700;
+  font-size: 1.125rem;
+}
+.tier-score-range {
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.tier-description {
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+</style>
+</head>
+<body class="min-h-screen">
+
+<!-- HERO -->
+<section class="relative overflow-hidden">
+  <div class="absolute inset-0 hero-gradient"></div>
+  <div class="max-w-4xl mx-auto px-6 pt-20 pb-16 text-center relative">
+    <div class="fade-up">
+      <p class="text-mtg-gold text-sm font-semibold tracking-widest uppercase mb-4">Beta v0.1</p>
+      <h1 class="font-cinzel text-4xl md:text-5xl text-white leading-tight mb-4">Manabot Insights</h1>
+      <p class="text-xl text-mtg-dim max-w-2xl mx-auto leading-relaxed">
+        A systematic methodology for building, auditing, and scoring Commander decks.
+        Stop guessing. Start engineering.
+      </p>
+    </div>
+    <div class="mt-10 fade-up fade-up-d2">
+      <a href="manabot-insights.html" class="inline-block px-8 py-4 rounded-lg bg-mtg-gold text-mtg-dark font-bold text-lg hover:bg-mtg-accent transition shadow-lg hover:shadow-mtg-gold/20">
+        Audit Your Deck
+      </a>
+      <p class="text-mtg-dim text-xs mt-3">Paste your deck list and walk through the full framework in minutes.</p>
+    </div>
+  </div>
+</section>
+
+<!-- WHAT IS THIS -->
+<section class="max-w-4xl mx-auto px-6 py-16">
+  <div class="text-center mb-12 fade-up">
+    <h2 class="font-cinzel text-2xl text-mtg-gold mb-3">What You Get</h2>
+    <p class="text-mtg-dim max-w-xl mx-auto">
+      The audit tool walks you through every layer of the framework. By the end, you'll have a complete synergy profile for your deck — numbers, grades, and specific cards to cut or add.
+    </p>
+  </div>
+
+  <div class="grid md:grid-cols-3 gap-5">
+    <!-- Card 1 -->
+    <div class="dim-card rounded-xl border border-mtg-border p-6 fade-up fade-up-d1 glow">
+      <div class="w-10 h-10 rounded-lg bg-mtg-gold/10 flex items-center justify-center mb-4">
+        <span class="text-mtg-gold text-lg font-bold">1</span>
+      </div>
+      <h3 class="text-white font-semibold text-sm mb-2">Commander Character Sheet</h3>
+      <p class="text-mtg-dim text-xs leading-relaxed">
+        Define your commander's mechanical identity: primary ability, axis (Enabler vs. Payoff), threat level, win condition, and 5 custom secondary ability categories tailored to your strategy.
+      </p>
+    </div>
+    <!-- Card 2 -->
+    <div class="dim-card rounded-xl border border-mtg-border p-6 fade-up fade-up-d2 glow">
+      <div class="w-10 h-10 rounded-lg bg-mtg-gold/10 flex items-center justify-center mb-4">
+        <span class="text-mtg-gold text-lg font-bold">2</span>
+      </div>
+      <h3 class="text-white font-semibold text-sm mb-2">Full Card Categorization</h3>
+      <p class="text-mtg-dim text-xs leading-relaxed">
+        Every non-land card is sorted into framework categories — Velocity, Ramp, Interaction, Wipes, and your 5 Secondary Abilities — with primary and secondary roles auto-detected from Scryfall data.
+      </p>
+    </div>
+    <!-- Card 3 -->
+    <div class="dim-card rounded-xl border border-mtg-border p-6 fade-up fade-up-d3 glow">
+      <div class="w-10 h-10 rounded-lg bg-mtg-gold/10 flex items-center justify-center mb-4">
+        <span class="text-mtg-gold text-lg font-bold">3</span>
+      </div>
+      <h3 class="text-white font-semibold text-sm mb-2">Synergy Web Protocol Score</h3>
+      <p class="text-mtg-dim text-xs leading-relaxed">
+        Your deck's synergy measured across 5 dimensions with letter grades. Not just "is this card good?" but "how does this card connect to everything else?"
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- DECK TIER GRADES -->
+<section class="max-w-4xl mx-auto px-6 py-16 border-t border-mtg-border">
+  <div class="text-center mb-12 fade-up">
+    <h2 class="font-cinzel text-2xl text-mtg-gold mb-3">Deck Tier Grades</h2>
+    <p class="text-mtg-dim max-w-2xl mx-auto">
+      Your average 5-Finger score determines your deck's tier. Here's what each level means. Climb the ladder toward inevitability.
+    </p>
+  </div>
+
+  <div class="max-w-2xl mx-auto space-y-4">
+    <!-- Inevitability Machine (TOP) -->
+    <div class="tier-card inevitability-machine rounded-lg p-6 fade-up fade-up-d1">
+      <div class="flex items-start justify-between gap-4">
+        <div class="flex-1">
+          <h3 class="tier-name text-purple-300 mb-1">Inevitability Machine</h3>
+          <p class="tier-score-range text-mtg-dim">4.6–5.0 average score</p>
+          <p class="tier-description text-mtg-dim mt-3">
+            The deck plays itself. Every card is load-bearing AND replaceable. The synergy web is so dense that any opening hand leads to the same destination. Removal doesn't hurt you because redundancy is built into every seam.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Engine Online -->
+    <div class="tier-card engine-online rounded-lg p-6 fade-up fade-up-d2">
+      <div class="flex items-start justify-between gap-4">
+        <div class="flex-1">
+          <h3 class="tier-name text-blue-300 mb-1">Engine Online</h3>
+          <p class="tier-score-range text-mtg-dim">3.6–4.5 average score</p>
+          <p class="tier-description text-mtg-dim mt-3">
+            The deck hums. Cards trigger other cards in clean chains. Removing one piece doesn't collapse the whole thing because there's redundancy built in. You can mulligan and still function. This is the gold standard.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Focused -->
+    <div class="tier-card focused rounded-lg p-6 fade-up fade-up-d3">
+      <div class="flex items-start justify-between gap-4">
+        <div class="flex-1">
+          <h3 class="tier-name text-green-300 mb-1">Focused</h3>
+          <p class="tier-score-range text-mtg-dim">2.6–3.5 average score</p>
+          <p class="tier-description text-mtg-dim mt-3">
+            Every card knows its job. The engine has moving parts that work together. Cuts are hard because everything matters. You have a cohesive strategy, but there's room for polish and more bridge cards to smooth the edges.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Standard -->
+    <div class="tier-card standard rounded-lg p-6 fade-up fade-up-d4">
+      <div class="flex items-start justify-between gap-4">
+        <div class="flex-1">
+          <h3 class="tier-name text-yellow-400 mb-1">Standard</h3>
+          <p class="tier-score-range text-mtg-dim">1.6–2.5 average score</p>
+          <p class="tier-description text-mtg-dim mt-3">
+            A deck with a theme but loose connections. You have a plan, but half your cards don't know what it is. Most precons live here. There's potential, but it needs tightening — more signal cards, fewer utility slots.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Synergy Soup (BOTTOM) -->
+    <div class="tier-card synergy-soup rounded-lg p-6 fade-up fade-up-d5">
+      <div class="flex items-start justify-between gap-4">
+        <div class="flex-1">
+          <h3 class="tier-name text-red-400 mb-1">Synergy Soup</h3>
+          <p class="tier-score-range text-mtg-dim">≤1.5 average score</p>
+          <p class="tier-description text-mtg-dim mt-3">
+            Cards that happen to be in the same sleeve. No cohesion, no engine, no plan. You're playing 99 individual cards, not a deck. Not bad — just unfocused. The framework will show you exactly which cards to cut to climb the ladder.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="text-center mt-10 fade-up fade-up-d5">
+    <p class="text-mtg-dim text-sm max-w-lg mx-auto">
+      The audit tool calculates your average 5-Finger score across all 99 non-land cards. Run it and find out where your deck ranks. Then use the specific cut recommendations to climb higher.
+    </p>
+  </div>
+</section>
+
+<!-- THE PROCESS -->
+<section class="max-w-4xl mx-auto px-6 py-16 border-t border-mtg-border">
+  <div class="text-center mb-12 fade-up">
+    <h2 class="font-cinzel text-2xl text-mtg-gold mb-3">How It Works</h2>
+    <p class="text-mtg-dim max-w-xl mx-auto">Six steps. Most of it is auto-filled. You review, adjust, and walk away with a full diagnostic.</p>
+  </div>
+
+  <div class="max-w-2xl mx-auto space-y-0">
+    <!-- Step 1 -->
+    <div class="flex gap-5 relative step-line fade-up fade-up-d1">
+      <div class="flex-shrink-0 w-14 h-14 rounded-full border-2 border-mtg-gold bg-mtg-gold/10 flex items-center justify-center">
+        <span class="font-cinzel text-mtg-gold font-bold">1</span>
+      </div>
+      <div class="pb-10">
+        <h3 class="text-white font-semibold mb-1">Import Your Deck</h3>
+        <p class="text-mtg-dim text-sm">Paste your deck list from Archidekt, Moxfield, or any standard format. Enter your commander name. The tool fetches every card's data from Scryfall automatically — oracle text, mana value, types, everything.</p>
+      </div>
+    </div>
+    <!-- Step 2 -->
+    <div class="flex gap-5 relative step-line fade-up fade-up-d2">
+      <div class="flex-shrink-0 w-14 h-14 rounded-full border-2 border-mtg-border bg-mtg-panel flex items-center justify-center">
+        <span class="font-cinzel text-mtg-dim font-bold">2</span>
+      </div>
+      <div class="pb-10">
+        <h3 class="text-white font-semibold mb-1">Fill the Character Sheet</h3>
+        <p class="text-mtg-dim text-sm">Define your commander's role. Is it an Enabler (engine for the 99) or a Payoff (the win condition itself)? What's the primary ability? The tool suggests 5 secondary ability categories by analyzing your cards' mechanical keywords.</p>
+      </div>
+    </div>
+    <!-- Step 3 -->
+    <div class="flex gap-5 relative step-line fade-up fade-up-d3">
+      <div class="flex-shrink-0 w-14 h-14 rounded-full border-2 border-mtg-border bg-mtg-panel flex items-center justify-center">
+        <span class="font-cinzel text-mtg-dim font-bold">3</span>
+      </div>
+      <div class="pb-10">
+        <h3 class="text-white font-semibold mb-1">Categorize Every Card</h3>
+        <p class="text-mtg-dim text-sm">Each card gets a primary and optional secondary category, auto-filled from oracle text analysis. You review and adjust. A live dashboard shows your ratios against framework targets (18 Velocity, 12-15 Ramp, 9-15 Interaction, 33-36 Lands).</p>
+      </div>
+    </div>
+    <!-- Step 4 -->
+    <div class="flex gap-5 relative step-line fade-up fade-up-d4">
+      <div class="flex-shrink-0 w-14 h-14 rounded-full border-2 border-mtg-border bg-mtg-panel flex items-center justify-center">
+        <span class="font-cinzel text-mtg-dim font-bold">4</span>
+      </div>
+      <div class="pb-10">
+        <h3 class="text-white font-semibold mb-1">5-Finger Quick Check</h3>
+        <p class="text-mtg-dim text-sm">Score every non-land card on 5 dimensions: Commander Signal, Dual-Category, Web Connected, Independent Value, and Temporal Fit. Each card gets a 0-5 score. Low-scoring cards are your cut candidates.</p>
+      </div>
+    </div>
+    <!-- Step 5 -->
+    <div class="flex gap-5 relative step-line fade-up fade-up-d5">
+      <div class="flex-shrink-0 w-14 h-14 rounded-full border-2 border-mtg-border bg-mtg-panel flex items-center justify-center">
+        <span class="font-cinzel text-mtg-dim font-bold">5</span>
+      </div>
+      <div class="pb-10">
+        <h3 class="text-white font-semibold mb-1">Results &amp; SWP Score</h3>
+        <p class="text-mtg-dim text-sm">Your deck's Synergy Web Protocol profile: Signal Density, Commander Independence, and Cross-Category Pollination — each graded F through S. Plus category ratio analysis, Pillar of Failure detection, and your bottom-10 cut list.</p>
+      </div>
+    </div>
+    <!-- Step 6 -->
+    <div class="flex gap-5 relative fade-up fade-up-d5">
+      <div class="flex-shrink-0 w-14 h-14 rounded-full border-2 border-mtg-border bg-mtg-panel flex items-center justify-center">
+        <span class="font-cinzel text-mtg-dim font-bold">6</span>
+      </div>
+      <div class="pb-10">
+        <h3 class="text-white font-semibold mb-1">Export &amp; Feedback</h3>
+        <p class="text-mtg-dim text-sm">Download your full audit as a text report. Share feedback on every step — what worked, what was confusing, what needs improvement. Your input directly shapes the next version.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- SWP EXPLAINER -->
+<section class="max-w-4xl mx-auto px-6 py-16 border-t border-mtg-border">
+  <div class="text-center mb-12 fade-up">
+    <h2 class="font-cinzel text-2xl text-mtg-gold mb-3">The Synergy Web Protocol</h2>
+    <p class="text-mtg-dim max-w-2xl mx-auto">
+      Most "synergy" metrics measure popularity. The SWP measures how your cards actually connect to each other. It treats your deck as a network — each card is a node, each interaction is an edge.
+    </p>
+  </div>
+
+  <div class="grid md:grid-cols-2 gap-5 mb-8">
+    <!-- SD -->
+    <div class="dim-card rounded-xl border border-mtg-border p-5 fade-up fade-up-d1">
+      <div class="flex items-center gap-3 mb-2">
+        <span class="text-2xl font-bold text-blue-400">SD</span>
+        <h3 class="text-white font-semibold text-sm">Signal Density</h3>
+      </div>
+      <p class="text-mtg-dim text-xs leading-relaxed">
+        What percentage of your non-land cards directly interact with your commander's primary ability? This separates focused decks from "goodstuff piles." A Sol Ring is great — but it doesn't interact with your commander's text box.
+      </p>
+      <div class="mt-3 text-xs text-mtg-dim">
+        <span class="text-blue-400 font-semibold">Target:</span> 50-80% for most strategies
+      </div>
+    </div>
+    <!-- CI -->
+    <div class="dim-card rounded-xl border border-mtg-border p-5 fade-up fade-up-d2">
+      <div class="flex items-center gap-3 mb-2">
+        <span class="text-2xl font-bold text-green-400">CI</span>
+        <h3 class="text-white font-semibold text-sm">Commander Independence</h3>
+      </div>
+      <p class="text-mtg-dim text-xs leading-relaxed">
+        If your commander gets exiled permanently, how much of your deck still functions? Low CI means you fall apart without your commander — the "Top-Down Trap." High CI means you can grind even without the engine online.
+      </p>
+      <div class="mt-3 text-xs text-mtg-dim">
+        <span class="text-green-400 font-semibold">Target:</span> 65-95% for Enabler commanders
+      </div>
+    </div>
+    <!-- CCP -->
+    <div class="dim-card rounded-xl border border-mtg-border p-5 fade-up fade-up-d3">
+      <div class="flex items-center gap-3 mb-2">
+        <span class="text-2xl font-bold text-purple-400">CCP</span>
+        <h3 class="text-white font-semibold text-sm">Cross-Category Pollination</h3>
+      </div>
+      <p class="text-mtg-dim text-xs leading-relaxed">
+        How many cards serve double duty — a ramp piece that also triggers your secondary ability, an interaction spell that feeds your engine. Bridge cards are the connective tissue that makes a deck feel "greater than the sum of its parts."
+      </p>
+      <div class="mt-3 text-xs text-mtg-dim">
+        <span class="text-purple-400 font-semibold">Target:</span> 30-60% is the sweet spot
+      </div>
+    </div>
+    <!-- ED + RI -->
+    <div class="dim-card rounded-xl border border-mtg-border p-5 fade-up fade-up-d4">
+      <div class="flex items-center gap-3 mb-2">
+        <span class="text-2xl font-bold text-orange-400">ED + RI</span>
+        <h3 class="text-white font-semibold text-sm">Engine Depth &amp; Resilience</h3>
+      </div>
+      <p class="text-mtg-dim text-xs leading-relaxed">
+        Engine Depth measures how long your synergy chains run — one card triggers another triggers another. Resilience Index asks: if you remove the single most-connected card, how much of the web survives? Together they measure engine quality and redundancy.
+      </p>
+      <div class="mt-3 text-xs text-mtg-dim">
+        <span class="text-orange-400 font-semibold">Coming in v0.2</span> — requires full graph analysis
+      </div>
+    </div>
+  </div>
+
+  <div class="text-center fade-up fade-up-d5">
+    <p class="text-mtg-dim text-sm max-w-xl mx-auto mb-2">
+      The SWP gives you a letter grade (F through S) on each dimension, plus a composite Synergy Engine Score. It's not about having "good cards" — it's about having cards that <em class="text-white">talk to each other</em>.
+    </p>
+  </div>
+</section>
+
+<!-- WHY THIS EXISTS -->
+<section class="max-w-4xl mx-auto px-6 py-16 border-t border-mtg-border">
+  <div class="max-w-2xl mx-auto text-center fade-up">
+    <h2 class="font-cinzel text-2xl text-mtg-gold mb-4">Why This Exists</h2>
+    <p class="text-mtg-dim text-sm leading-relaxed mb-4">
+      EDHREC tells you what cards are popular. The 8x8 method tells you to run 8 categories of 8 cards. Neither tells you whether your cards actually work together.
+    </p>
+    <p class="text-mtg-dim text-sm leading-relaxed mb-4">
+      Manabot Insights splits your 99 into strict category ratios backed by hypergeometric probability. The Synergy Web Protocol scores every card on how it connects to the rest of the deck. Together, they give you a complete structural diagnosis — not opinions, math.
+    </p>
+    <p class="text-mtg-dim text-sm leading-relaxed">
+      This is a beta. The methodology is being tested and refined with real decks from real players. Your feedback shapes the next version.
+    </p>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="max-w-4xl mx-auto px-6 py-20 text-center">
+  <div class="fade-up">
+    <h2 class="font-cinzel text-3xl text-white mb-4">Ready to audit your deck?</h2>
+    <p class="text-mtg-dim mb-8 max-w-md mx-auto">Paste your deck list, walk through the framework, and see your synergy profile in minutes.</p>
+    <a href="manabot-insights.html" class="inline-block px-8 py-4 rounded-lg bg-mtg-gold text-mtg-dark font-bold text-lg hover:bg-mtg-accent transition shadow-lg hover:shadow-mtg-gold/20">
+      Start Your Audit
+    </a>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer class="border-t border-mtg-border px-6 py-6 text-center">
+  <p class="text-mtg-dim text-xs">Manabot Insights &amp; Synergy Web Protocol — Beta v0.1</p>
+  <p class="text-mtg-dim/60 text-xs mt-1">Built by The Arch-Artificer. Card data powered by Scryfall.</p>
+</footer>
+
+</body>
+</html>
