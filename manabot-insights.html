@@ -28,6 +28,100 @@ select:focus, input:focus, textarea:focus { border-color: #d4a843 !important; ou
 .score-btn { min-width: 36px; transition: all 0.15s; }
 .score-btn.selected { background: #d4a843; color: #0c0e14; font-weight: 600; }
 .cat-pill { padding: 2px 8px; border-radius: 9999px; font-size: 0.7rem; font-weight: 600; }
+
+/* ── Mobile-First Responsive ── */
+@media (max-width: 639px) {
+  /* Header */
+  header { padding: 0.5rem 0.75rem; flex-wrap: wrap; gap: 0.5rem; }
+  header h1 { font-size: 0.95rem; }
+  header p { display: none; }
+  #step-nav { gap: 0.25rem; order: 3; width: 100%; justify-content: center; padding-top: 0.25rem; border-top: 1px solid #2a2f3e; }
+  #step-nav .step-dot { width: 1.5rem; height: 1.5rem; font-size: 0.6rem; }
+  #step-nav .step-connector { width: 0.75rem; }
+
+  /* Main container */
+  main { padding: 1rem 0.75rem; }
+
+  /* Card tables → stacked card layout */
+  .card-table-header { display: none !important; }
+  .card-table-row {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 0.375rem !important;
+    padding: 0.75rem !important;
+    border: 1px solid #2a2f3e !important;
+    border-radius: 0.5rem !important;
+    margin-bottom: 0.5rem !important;
+  }
+  .card-table-row > * { grid-column: unset !important; }
+  .card-table-row .card-name { width: 100%; font-size: 0.875rem; font-weight: 600; }
+  .card-table-row .card-mv { display: inline-block; }
+  .card-table-row .card-type { display: inline-block; flex: 1; }
+  .card-table-row .card-primary,
+  .card-table-row .card-secondary { width: calc(50% - 0.25rem); }
+  .card-table-row .card-primary select,
+  .card-table-row .card-secondary select { width: 100%; font-size: 0.8rem; padding: 0.375rem 0.25rem; }
+  .card-table-row .card-info { display: none; }
+
+  /* Score table → stacked card layout */
+  .score-table-header { display: none !important; }
+  .score-table-row {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 0.375rem !important;
+    padding: 0.75rem !important;
+    border: 1px solid #2a2f3e !important;
+    border-radius: 0.5rem !important;
+    margin-bottom: 0.5rem !important;
+    align-items: center !important;
+  }
+  .score-table-row > * { grid-column: unset !important; }
+  .score-table-row .score-card-name { width: 100%; font-size: 0.875rem; font-weight: 600; }
+  .score-table-row .score-cat { display: none; }
+  .score-table-row .score-fingers { display: flex; gap: 0.25rem; flex: 1; }
+  .score-table-row .score-total { font-size: 1rem; font-weight: 700; }
+
+  /* 5-col grids → 2-col on mobile */
+  .ratio-grid, .legend-grid, .results-ratio-grid, .results-sa-grid { grid-template-columns: repeat(2, 1fr) !important; }
+  /* 3-col grids → 1-col on mobile */
+  .dim-grid { grid-template-columns: 1fr !important; }
+
+  /* Canvas responsive */
+  #swp-radar { max-width: 100%; height: auto; }
+
+  /* Modal */
+  #card-modal-img { max-width: 90vw; max-height: 80vh; }
+
+  /* Info boxes */
+  .info-box { padding: 0.75rem; font-size: 0.8rem; }
+
+  /* Nav buttons */
+  .nav-buttons { flex-direction: column; gap: 0.5rem; }
+  .nav-buttons button { width: 100%; }
+
+  /* Cut list */
+  .cut-list-header { display: none !important; }
+  .cut-list-row {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 0.375rem !important;
+    padding: 0.75rem !important;
+    border: 1px solid #2a2f3e !important;
+    border-radius: 0.5rem !important;
+    margin-bottom: 0.5rem !important;
+  }
+  .cut-list-row > * { grid-column: unset !important; }
+  .cut-list-row .cut-name { width: 100%; font-weight: 600; }
+  .cut-list-row .cut-scores { display: flex; gap: 0.25rem; flex: 1; }
+}
+
+/* Tablet (640-1023px) */
+@media (min-width: 640px) and (max-width: 1023px) {
+  #step-nav .step-dot { width: 1.75rem; height: 1.75rem; font-size: 0.65rem; }
+  #step-nav .step-connector { width: 1rem; }
+  .card-table-row .card-type { display: none; }
+  .score-table-row .score-cat { display: none; }
+}
 ::-webkit-scrollbar { width: 8px; }
 ::-webkit-scrollbar-track { background: #161924; }
 ::-webkit-scrollbar-thumb { background: #2a2f3e; border-radius: 4px; }
@@ -61,7 +155,7 @@ select:focus, input:focus, textarea:focus { border-color: #d4a843 !important; ou
 
 <!-- CARD PREVIEW MODAL -->
 <div id="card-modal" class="fixed inset-0 bg-black/70 z-50 hidden items-center justify-center" onclick="this.classList.add('hidden'); this.classList.remove('flex');">
-  <img id="card-modal-img" class="max-h-[80vh] rounded-lg shadow-2xl" />
+  <img id="card-modal-img" class="max-h-[80vh] max-w-[90vw] rounded-lg shadow-2xl" />
 </div>
 
 <script>
@@ -1192,13 +1286,13 @@ function renderStepNav() {
   nav.innerHTML = '';
   STEPS.forEach((s, i) => {
     const dot = el('div', {
-      className: `step-dot w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold cursor-pointer border-2 transition-all ${i === STATE.step ? 'active border-mtg-gold text-mtg-dark' : i < STATE.step ? 'done border-green-500 text-white' : 'border-mtg-border text-mtg-dim'}`,
+      className: `step-dot rounded-full flex items-center justify-center font-bold cursor-pointer border-2 transition-all text-[0.6rem] w-6 h-6 sm:w-8 sm:h-8 sm:text-xs ${i === STATE.step ? 'active border-mtg-gold text-mtg-dark' : i < STATE.step ? 'done border-green-500 text-white' : 'border-mtg-border text-mtg-dim'}`,
       onClick: () => { if (i <= STATE.step || i <= furthestStep()) { STATE.step = i; render(); } },
       'data-tip': s.label
     }, [s.icon]);
     dot.classList.add('tooltip');
     nav.appendChild(dot);
-    if (i < STEPS.length - 1) nav.appendChild(el('div', { className: 'w-6 h-px bg-mtg-border' }));
+    if (i < STEPS.length - 1) nav.appendChild(el('div', { className: 'step-connector w-3 sm:w-6 h-px bg-mtg-border' }));
   });
 }
 
@@ -1210,7 +1304,7 @@ function furthestStep() {
 }
 
 function navButtons(canBack, canNext, nextLabel = 'Continue', onNext = null) {
-  const div = el('div', { className: 'flex justify-between mt-8 pt-4 border-t border-mtg-border' });
+  const div = el('div', { className: 'nav-buttons flex flex-col-reverse sm:flex-row justify-between mt-8 pt-4 border-t border-mtg-border gap-3' });
   if (canBack) {
     div.appendChild(el('button', {
       className: 'px-5 py-2 rounded border border-mtg-border text-mtg-dim hover:text-white hover:border-mtg-gold transition',
@@ -1787,7 +1881,7 @@ function renderCategorize() {
     Wipe: `${profile.wipe[0]}-${profile.wipe[1]}`,
     Land: `${profile.lands[0]}-${profile.lands[1]}`
   };
-  const ratioBar = el('div', { className: 'grid grid-cols-5 gap-2 mb-4 p-3 rounded-lg bg-mtg-panel border border-mtg-border' });
+  const ratioBar = el('div', { className: 'ratio-grid grid grid-cols-3 sm:grid-cols-5 gap-2 mb-4 p-3 rounded-lg bg-mtg-panel border border-mtg-border' });
   const bracketMins = {
     Velocity: profile.velocity[0], Ramp: profile.ramp[0],
     Interaction: profile.interaction[0], Wipe: profile.wipe[0], Land: profile.lands[0]
@@ -1833,14 +1927,14 @@ function renderCategorize() {
   const nonLand = getNonLandCards();
   const table = el('div', { className: 'space-y-1' });
 
-  // Header
-  const header = el('div', { className: 'grid grid-cols-12 gap-2 px-3 py-2 text-xs font-semibold text-mtg-dim border-b border-mtg-border' });
+  // Header (hidden on mobile via CSS)
+  const header = el('div', { className: 'card-table-header grid grid-cols-12 gap-2 px-3 py-2 text-xs font-semibold text-mtg-dim border-b border-mtg-border hidden sm:grid' });
   header.appendChild(el('div', { className: 'col-span-4' }, ['Card']));
   header.appendChild(el('div', { className: 'col-span-1 text-center' }, ['MV']));
-  header.appendChild(el('div', { className: 'col-span-2' }, ['Type']));
-  header.appendChild(el('div', { className: 'col-span-2' }, ['Primary']));
-  header.appendChild(el('div', { className: 'col-span-2' }, ['Secondary']));
-  header.appendChild(el('div', { className: 'col-span-1 text-center' }, ['Info']));
+  header.appendChild(el('div', { className: 'col-span-2 hidden md:block' }, ['Type']));
+  header.appendChild(el('div', { className: 'col-span-2 md:col-span-2' }, ['Primary']));
+  header.appendChild(el('div', { className: 'col-span-2 md:col-span-2' }, ['Secondary']));
+  header.appendChild(el('div', { className: 'col-span-1 text-center hidden md:block' }, ['Info']));
   table.appendChild(header);
 
   nonLand.forEach(c => {
@@ -1848,18 +1942,19 @@ function renderCategorize() {
     if (!STATE.categories[c.name]) STATE.categories[c.name] = { primary: '', secondary: '' };
     const cat = STATE.categories[c.name];
 
-    const row = el('div', { className: 'grid grid-cols-12 gap-2 px-3 py-2 rounded card-hover border border-transparent items-center text-sm' });
+    const row = el('div', { className: 'card-table-row grid grid-cols-12 gap-2 px-3 py-2 rounded card-hover border border-transparent items-center text-sm' });
 
     // Name
-    const nameEl = el('div', { className: 'col-span-4 cursor-pointer hover:text-mtg-gold truncate', onClick: () => showCardModal(c.name) }, [c.name]);
+    const nameEl = el('div', { className: 'card-name col-span-4 cursor-pointer hover:text-mtg-gold truncate', onClick: () => showCardModal(c.name) }, [c.name]);
     row.appendChild(nameEl);
 
     // MV
-    row.appendChild(el('div', { className: 'col-span-1 text-center text-mtg-dim' }, [sd ? String(sd.cmc) : '?']));
+    const mvEl = el('div', { className: 'card-mv col-span-1 text-center text-mtg-dim text-xs' }, [sd ? `MV ${sd.cmc}` : '?']);
+    row.appendChild(mvEl);
 
     // Type
     const shortType = sd ? sd.type_line.replace(/Legendary\s*/i, '').split('—')[0].trim() : '';
-    row.appendChild(el('div', { className: 'col-span-2 text-xs text-mtg-dim truncate' }, [shortType]));
+    row.appendChild(el('div', { className: 'card-type col-span-2 text-xs text-mtg-dim truncate hidden md:block' }, [shortType]));
 
     // Build list of available categories (core + named SAs only)
     const availableCats = CATEGORIES.filter(ct => {
@@ -1869,8 +1964,8 @@ function renderCategorize() {
     });
 
     // Primary Category
-    const priSelect = el('select', { className: 'col-span-2 rounded border px-1 py-1 text-xs' });
-    priSelect.appendChild(el('option', { value: '' }, ['— Select —']));
+    const priSelect = el('select', { className: 'card-primary col-span-2 rounded border px-1 py-1 text-xs' });
+    priSelect.appendChild(el('option', { value: '' }, ['— Primary —']));
     availableCats.forEach(ct => {
       const opt = el('option', { value: ct }, [catDisplayName(ct)]);
       if (cat.primary === ct) opt.selected = true;
@@ -1880,8 +1975,8 @@ function renderCategorize() {
     row.appendChild(priSelect);
 
     // Secondary Category
-    const secSelect = el('select', { className: 'col-span-2 rounded border px-1 py-1 text-xs' });
-    secSelect.appendChild(el('option', { value: '' }, ['— None —']));
+    const secSelect = el('select', { className: 'card-secondary col-span-2 rounded border px-1 py-1 text-xs' });
+    secSelect.appendChild(el('option', { value: '' }, ['— Secondary —']));
     availableCats.forEach(ct => {
       const opt = el('option', { value: ct }, [catDisplayName(ct)]);
       if (cat.secondary === ct) opt.selected = true;
@@ -1890,8 +1985,8 @@ function renderCategorize() {
     secSelect.addEventListener('change', e => { cat.secondary = e.target.value; STATE.userEdited[c.name] = true; render(); });
     row.appendChild(secSelect);
 
-    // Info button (shows oracle text)
-    const infoBtn = el('div', { className: 'col-span-1 text-center' });
+    // Info button (hidden on mobile — tap card name instead)
+    const infoBtn = el('div', { className: 'card-info col-span-1 text-center hidden md:block' });
     const oBtn = el('button', {
       className: 'text-mtg-dim hover:text-mtg-gold text-xs',
       onClick: () => showCardModal(c.name)
@@ -1936,7 +2031,7 @@ function renderScore() {
   ));
 
   // Legend
-  const legendBox = el('div', { className: 'grid grid-cols-5 gap-2 mb-4 p-3 rounded-lg bg-mtg-panel border border-mtg-border text-xs' });
+  const legendBox = el('div', { className: 'legend-grid grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 mb-4 p-3 rounded-lg bg-mtg-panel border border-mtg-border text-xs' });
   const fingerDefs = [
     ['CS', 'Commander Signal', 'Directly interacts with commander\'s Primary Ability?', '0/1'],
     ['DC', 'Dual-Category', 'Serves 2+ framework categories?', '0/1'],
@@ -1966,14 +2061,14 @@ function renderScore() {
   const nonLand = getNonLandCards();
   const table = el('div', { className: 'space-y-1' });
 
-  // Header
-  const header = el('div', { className: 'grid grid-cols-12 gap-2 px-3 py-2 text-xs font-semibold text-mtg-dim border-b border-mtg-border' });
+  // Header (hidden on mobile)
+  const header = el('div', { className: 'score-table-header grid grid-cols-12 gap-2 px-3 py-2 text-xs font-semibold text-mtg-dim border-b border-mtg-border hidden sm:grid' });
   header.appendChild(el('div', { className: 'col-span-4' }, ['Card']));
-  header.appendChild(el('div', { className: 'col-span-1 text-center' }, ['Cat']));
+  header.appendChild(el('div', { className: 'col-span-1 text-center hidden md:block' }, ['Cat']));
   ['CS','DC','WC','IV','TF'].forEach(f => {
     header.appendChild(el('div', { className: 'col-span-1 text-center' }, [f]));
   });
-  header.appendChild(el('div', { className: 'col-span-2 text-center' }, ['Total']));
+  header.appendChild(el('div', { className: 'col-span-2 md:col-span-2 text-center' }, ['Total']));
   table.appendChild(header);
 
   nonLand.forEach(c => {
@@ -1982,45 +2077,44 @@ function renderScore() {
     const cat = STATE.categories[c.name]?.primary || '';
     const total = (f.cs + f.dc + f.wc + f.iv + f.tf).toFixed(1);
 
-    const row = el('div', { className: 'grid grid-cols-12 gap-2 px-3 py-1.5 rounded card-hover border border-transparent items-center text-sm' });
+    const row = el('div', { className: 'score-table-row grid grid-cols-12 gap-2 px-3 py-1.5 rounded card-hover border border-transparent items-center text-sm' });
 
     // Name
     row.appendChild(el('div', {
-      className: 'col-span-4 cursor-pointer hover:text-mtg-gold truncate text-xs',
+      className: 'score-card-name col-span-4 cursor-pointer hover:text-mtg-gold truncate text-xs',
       onClick: () => showCardModal(c.name)
     }, [c.name]));
 
-    // Category pill
-    const catPill = el('div', { className: 'col-span-1 text-center' });
+    // Category pill (hidden on mobile/tablet)
+    const catPill = el('div', { className: 'score-cat col-span-1 text-center hidden md:block' });
     if (cat) {
       const label = catDisplayName(cat).slice(0, 12);
       catPill.appendChild(el('span', { className: 'cat-pill', style: `background:${CAT_COLORS[cat]}33; color:${CAT_COLORS[cat]}` }, [label]));
     }
     row.appendChild(catPill);
 
-    // Score buttons
+    // Score buttons wrapper
+    const fingerWrap = el('div', { className: 'score-fingers col-span-5 flex justify-center gap-1' });
     ['cs','dc','wc','iv','tf'].forEach(key => {
-      const cell = el('div', { className: 'col-span-1 text-center' });
       if (key === 'iv') {
-        // Tri-state: 0 → 0.5 → 1 → 0
         const btn = el('button', {
           className: `score-btn rounded px-2 py-1 text-xs border border-mtg-border ${f[key] > 0 ? 'selected' : 'text-mtg-dim'}`,
           onClick: () => { f[key] = f[key] === 0 ? 0.5 : f[key] === 0.5 ? 1 : 0; STATE.fingerEdited[c.name] = true; render(); }
         }, [String(f[key])]);
-        cell.appendChild(btn);
+        fingerWrap.appendChild(btn);
       } else {
         const btn = el('button', {
           className: `score-btn rounded px-2 py-1 text-xs border border-mtg-border ${f[key] ? 'selected' : 'text-mtg-dim'}`,
           onClick: () => { f[key] = f[key] ? 0 : 1; STATE.fingerEdited[c.name] = true; render(); }
         }, [String(f[key])]);
-        cell.appendChild(btn);
+        fingerWrap.appendChild(btn);
       }
-      row.appendChild(cell);
     });
+    row.appendChild(fingerWrap);
 
     // Total
     const totalColor = parseFloat(total) >= 3.6 ? 'text-green-400' : parseFloat(total) >= 2.6 ? 'text-mtg-gold' : parseFloat(total) >= 1.6 ? 'text-mtg-dim' : 'text-red-400';
-    row.appendChild(el('div', { className: `col-span-2 text-center font-bold ${totalColor}` }, [total]));
+    row.appendChild(el('div', { className: `score-total col-span-2 text-center font-bold ${totalColor}` }, [total]));
 
     table.appendChild(row);
   });
@@ -2071,7 +2165,7 @@ function renderResults() {
   const ccp = parseFloat(calcCCP());
   const sdG = getSDGrade(sd), ciG = getCIGrade(ci), ccpG = getCCPGrade(ccp);
 
-  const dimGrid = el('div', { className: 'grid grid-cols-3 gap-4 mb-6' });
+  const dimGrid = el('div', { className: 'dim-grid grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 mb-6' });
 
   // SD
   dimGrid.appendChild(makeDimCard('Signal Density', sd, sdG,
@@ -2090,7 +2184,8 @@ function renderResults() {
   radarSection.appendChild(el('h3', { className: 'font-cinzel text-lg text-mtg-gold mb-4' }, ['SWP Profile']));
 
   const canvasContainer = el('div', { style: 'display:flex;justify-content:center;margin-bottom:1.5rem' });
-  const canvas = el('canvas', { id: 'swp-radar', width: '320', height: '320' });
+  const canvasSize = Math.min(320, (window.innerWidth - 48));
+  const canvas = el('canvas', { id: 'swp-radar', width: String(canvasSize), height: String(canvasSize), style: 'max-width:100%;height:auto;' });
   canvasContainer.appendChild(canvas);
   radarSection.appendChild(canvasContainer);
 
@@ -2116,7 +2211,7 @@ function renderResults() {
   // Category Counts
   const counts = calcCategoryCounts();
   container.appendChild(el('h3', { className: 'font-cinzel text-lg text-white mb-3' }, ['Framework Ratios']));
-  const ratioGrid = el('div', { className: 'grid grid-cols-5 gap-3 mb-6' });
+  const ratioGrid = el('div', { className: 'results-ratio-grid grid grid-cols-3 sm:grid-cols-5 gap-2 sm:gap-3 mb-6' });
   const profile = getProfile();
   const ratioTargets = {
     Velocity: profile.velocity, Ramp: profile.ramp,
@@ -2135,7 +2230,7 @@ function renderResults() {
   container.appendChild(ratioGrid);
 
   // SA Counts
-  const saGrid = el('div', { className: 'grid grid-cols-5 gap-3 mb-6' });
+  const saGrid = el('div', { className: 'results-sa-grid grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 sm:gap-3 mb-6' });
   for (let i = 1; i <= 5; i++) {
     const cat = `SA-${i}`;
     const label = catDisplayName(cat);
@@ -2194,7 +2289,7 @@ function renderResults() {
   if (scored.length > 0) {
     container.appendChild(el('p', { className: 'text-xs text-mtg-dim mb-3' }, ['These cards scored lowest on the 5-Finger check. Consider whether each one truly earns its slot, or whether a higher-synergy replacement exists.']));
     const cutTable = el('div', { className: 'space-y-1 mb-6' });
-    const cutHeader = el('div', { className: 'grid grid-cols-12 gap-2 px-3 py-1.5 text-xs font-semibold text-mtg-dim border-b border-mtg-border' });
+    const cutHeader = el('div', { className: 'cut-list-header grid grid-cols-12 gap-2 px-3 py-1.5 text-xs font-semibold text-mtg-dim border-b border-mtg-border hidden sm:grid' });
     cutHeader.appendChild(el('div', { className: 'col-span-1' }, ['#']));
     cutHeader.appendChild(el('div', { className: 'col-span-5' }, ['Card']));
     cutHeader.appendChild(el('div', { className: 'col-span-2' }, ['Category']));
@@ -2203,17 +2298,18 @@ function renderResults() {
     cutTable.appendChild(cutHeader);
 
     scored.slice(0, 10).forEach((c, i) => {
-      const row = el('div', { className: 'grid grid-cols-12 gap-2 px-3 py-1.5 rounded card-hover border border-transparent items-center text-sm' });
-      row.appendChild(el('div', { className: 'col-span-1 text-xs text-mtg-dim' }, [String(i + 1)]));
-      row.appendChild(el('div', { className: 'col-span-5 cursor-pointer hover:text-mtg-gold truncate', onClick: () => showCardModal(c.name) }, [c.name]));
+      const row = el('div', { className: 'cut-list-row grid grid-cols-12 gap-2 px-3 py-1.5 rounded card-hover border border-transparent items-center text-sm' });
+      row.appendChild(el('div', { className: 'col-span-1 text-xs text-mtg-dim hidden sm:block' }, [String(i + 1)]));
+      const nameEl = el('div', { className: 'cut-name col-span-5 cursor-pointer hover:text-mtg-gold truncate', onClick: () => showCardModal(c.name) }, [`${i + 1}. ${c.name}`]);
+      row.appendChild(nameEl);
       const catLabel = catDisplayName(c.cat);
       const catColor = CAT_COLORS[c.cat] || '#8b92a8';
-      row.appendChild(el('div', { className: 'col-span-2' }, [
+      row.appendChild(el('div', { className: 'col-span-2 hidden sm:block' }, [
         catLabel ? el('span', { className: 'cat-pill', style: `background:${catColor}33; color:${catColor}` }, [catLabel]) : el('span', { className: 'text-xs text-mtg-dim' }, ['—'])
       ]));
-      row.appendChild(el('div', { className: 'col-span-2 text-center text-mtg-dim' }, [String(c.mv)]));
+      row.appendChild(el('div', { className: 'col-span-2 text-center text-mtg-dim text-xs' }, [`MV ${c.mv}`]));
       const scoreColor = c.total <= 1.5 ? 'text-red-400' : c.total <= 2.5 ? 'text-yellow-400' : 'text-mtg-dim';
-      row.appendChild(el('div', { className: `col-span-2 text-center font-bold ${scoreColor}` }, [c.total.toFixed(1)]));
+      row.appendChild(el('div', { className: `cut-scores col-span-2 text-center font-bold ${scoreColor}` }, [c.total.toFixed(1) + '/5']));
       cutTable.appendChild(row);
     });
     container.appendChild(cutTable);

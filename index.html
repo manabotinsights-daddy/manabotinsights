@@ -28,7 +28,8 @@ h1, h2, h3, .font-cinzel { font-family: 'Cinzel', serif; }
 .fade-up-d4 { animation-delay: 0.4s; }
 .fade-up-d5 { animation-delay: 0.5s; }
 @keyframes fadeUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
-.step-line::before { content: ''; position: absolute; left: 27px; top: 48px; bottom: -8px; width: 2px; background: #2a2f3e; }
+.step-line::before { content: ''; position: absolute; left: 19px; top: 40px; bottom: -8px; width: 2px; background: #2a2f3e; }
+@media (min-width: 640px) { .step-line::before { left: 27px; top: 48px; } }
 .step-line:last-child::before { display: none; }
 .dim-card { background: linear-gradient(135deg, #161924 0%, #1a1f30 100%); }
 
@@ -108,17 +109,17 @@ h1, h2, h3, .font-cinzel { font-family: 'Cinzel', serif; }
 <!-- HERO -->
 <section class="relative overflow-hidden">
   <div class="absolute inset-0 hero-gradient"></div>
-  <div class="max-w-4xl mx-auto px-6 pt-20 pb-16 text-center relative">
+  <div class="max-w-4xl mx-auto px-4 sm:px-6 pt-12 sm:pt-20 pb-10 sm:pb-16 text-center relative">
     <div class="fade-up">
-      <p class="text-mtg-gold text-sm font-semibold tracking-widest uppercase mb-4">Beta v0.1</p>
-      <h1 class="font-cinzel text-4xl md:text-5xl text-white leading-tight mb-4">Manabot Insights</h1>
-      <p class="text-xl text-mtg-dim max-w-2xl mx-auto leading-relaxed">
+      <p class="text-mtg-gold text-xs sm:text-sm font-semibold tracking-widest uppercase mb-4">Beta v0.1</p>
+      <h1 class="font-cinzel text-2xl sm:text-3xl md:text-4xl lg:text-5xl text-white leading-tight mb-4">Manabot Insights</h1>
+      <p class="text-base sm:text-lg md:text-xl text-mtg-dim max-w-2xl mx-auto leading-relaxed">
         A systematic methodology for building, auditing, and scoring Commander decks.
         Stop guessing. Start engineering.
       </p>
     </div>
     <div class="mt-10 fade-up fade-up-d2">
-      <a href="manabot-insights.html" class="inline-block px-8 py-4 rounded-lg bg-mtg-gold text-mtg-dark font-bold text-lg hover:bg-mtg-accent transition shadow-lg hover:shadow-mtg-gold/20">
+      <a href="manabot-insights.html" class="inline-block px-6 py-3 sm:px-8 sm:py-4 rounded-lg bg-mtg-gold text-mtg-dark font-bold text-base sm:text-lg hover:bg-mtg-accent transition shadow-lg hover:shadow-mtg-gold/20">
         Audit Your Deck
       </a>
       <p class="text-mtg-dim text-xs mt-3">Paste your deck list and walk through the full framework in minutes.</p>
@@ -127,7 +128,7 @@ h1, h2, h3, .font-cinzel { font-family: 'Cinzel', serif; }
 </section>
 
 <!-- WHAT IS THIS -->
-<section class="max-w-4xl mx-auto px-6 py-16">
+<section class="max-w-4xl mx-auto px-4 sm:px-6 py-10 sm:py-16">
   <div class="text-center mb-12 fade-up">
     <h2 class="font-cinzel text-2xl text-mtg-gold mb-3">What You Get</h2>
     <p class="text-mtg-dim max-w-xl mx-auto">
@@ -135,7 +136,7 @@ h1, h2, h3, .font-cinzel { font-family: 'Cinzel', serif; }
     </p>
   </div>
 
-  <div class="grid md:grid-cols-3 gap-5">
+  <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 sm:gap-5">
     <!-- Card 1 -->
     <div class="dim-card rounded-xl border border-mtg-border p-6 fade-up fade-up-d1 glow">
       <div class="w-10 h-10 rounded-lg bg-mtg-gold/10 flex items-center justify-center mb-4">
@@ -170,7 +171,7 @@ h1, h2, h3, .font-cinzel { font-family: 'Cinzel', serif; }
 </section>
 
 <!-- DECK TIER GRADES -->
-<section class="max-w-4xl mx-auto px-6 py-16 border-t border-mtg-border">
+<section class="max-w-4xl mx-auto px-4 sm:px-6 py-10 sm:py-16 border-t border-mtg-border">
   <div class="text-center mb-12 fade-up">
     <h2 class="font-cinzel text-2xl text-mtg-gold mb-3">Deck Tier Grades</h2>
     <p class="text-mtg-dim max-w-2xl mx-auto">
@@ -253,7 +254,7 @@ h1, h2, h3, .font-cinzel { font-family: 'Cinzel', serif; }
 </section>
 
 <!-- THE PROCESS -->
-<section class="max-w-4xl mx-auto px-6 py-16 border-t border-mtg-border">
+<section class="max-w-4xl mx-auto px-4 sm:px-6 py-10 sm:py-16 border-t border-mtg-border">
   <div class="text-center mb-12 fade-up">
     <h2 class="font-cinzel text-2xl text-mtg-gold mb-3">How It Works</h2>
     <p class="text-mtg-dim max-w-xl mx-auto">Six steps. Most of it is auto-filled. You review, adjust, and walk away with a full diagnostic.</p>
@@ -261,8 +262,8 @@ h1, h2, h3, .font-cinzel { font-family: 'Cinzel', serif; }
 
   <div class="max-w-2xl mx-auto space-y-0">
     <!-- Step 1 -->
-    <div class="flex gap-5 relative step-line fade-up fade-up-d1">
-      <div class="flex-shrink-0 w-14 h-14 rounded-full border-2 border-mtg-gold bg-mtg-gold/10 flex items-center justify-center">
+    <div class="flex gap-3 sm:gap-5 relative step-line fade-up fade-up-d1">
+      <div class="flex-shrink-0 w-10 h-10 sm:w-14 sm:h-14 rounded-full border-2 border-mtg-gold bg-mtg-gold/10 flex items-center justify-center">
         <span class="font-cinzel text-mtg-gold font-bold">1</span>
       </div>
       <div class="pb-10">
@@ -271,8 +272,8 @@ h1, h2, h3, .font-cinzel { font-family: 'Cinzel', serif; }
       </div>
     </div>
     <!-- Step 2 -->
-    <div class="flex gap-5 relative step-line fade-up fade-up-d2">
-      <div class="flex-shrink-0 w-14 h-14 rounded-full border-2 border-mtg-border bg-mtg-panel flex items-center justify-center">
+    <div class="flex gap-3 sm:gap-5 relative step-line fade-up fade-up-d2">
+      <div class="flex-shrink-0 w-10 h-10 sm:w-14 sm:h-14 rounded-full border-2 border-mtg-border bg-mtg-panel flex items-center justify-center">
         <span class="font-cinzel text-mtg-dim font-bold">2</span>
       </div>
       <div class="pb-10">
@@ -281,8 +282,8 @@ h1, h2, h3, .font-cinzel { font-family: 'Cinzel', serif; }
       </div>
     </div>
     <!-- Step 3 -->
-    <div class="flex gap-5 relative step-line fade-up fade-up-d3">
-      <div class="flex-shrink-0 w-14 h-14 rounded-full border-2 border-mtg-border bg-mtg-panel flex items-center justify-center">
+    <div class="flex gap-3 sm:gap-5 relative step-line fade-up fade-up-d3">
+      <div class="flex-shrink-0 w-10 h-10 sm:w-14 sm:h-14 rounded-full border-2 border-mtg-border bg-mtg-panel flex items-center justify-center">
         <span class="font-cinzel text-mtg-dim font-bold">3</span>
       </div>
       <div class="pb-10">
@@ -291,8 +292,8 @@ h1, h2, h3, .font-cinzel { font-family: 'Cinzel', serif; }
       </div>
     </div>
     <!-- Step 4 -->
-    <div class="flex gap-5 relative step-line fade-up fade-up-d4">
-      <div class="flex-shrink-0 w-14 h-14 rounded-full border-2 border-mtg-border bg-mtg-panel flex items-center justify-center">
+    <div class="flex gap-3 sm:gap-5 relative step-line fade-up fade-up-d4">
+      <div class="flex-shrink-0 w-10 h-10 sm:w-14 sm:h-14 rounded-full border-2 border-mtg-border bg-mtg-panel flex items-center justify-center">
         <span class="font-cinzel text-mtg-dim font-bold">4</span>
       </div>
       <div class="pb-10">
@@ -301,8 +302,8 @@ h1, h2, h3, .font-cinzel { font-family: 'Cinzel', serif; }
       </div>
     </div>
     <!-- Step 5 -->
-    <div class="flex gap-5 relative step-line fade-up fade-up-d5">
-      <div class="flex-shrink-0 w-14 h-14 rounded-full border-2 border-mtg-border bg-mtg-panel flex items-center justify-center">
+    <div class="flex gap-3 sm:gap-5 relative step-line fade-up fade-up-d5">
+      <div class="flex-shrink-0 w-10 h-10 sm:w-14 sm:h-14 rounded-full border-2 border-mtg-border bg-mtg-panel flex items-center justify-center">
         <span class="font-cinzel text-mtg-dim font-bold">5</span>
       </div>
       <div class="pb-10">
@@ -311,8 +312,8 @@ h1, h2, h3, .font-cinzel { font-family: 'Cinzel', serif; }
       </div>
     </div>
     <!-- Step 6 -->
-    <div class="flex gap-5 relative fade-up fade-up-d5">
-      <div class="flex-shrink-0 w-14 h-14 rounded-full border-2 border-mtg-border bg-mtg-panel flex items-center justify-center">
+    <div class="flex gap-3 sm:gap-5 relative fade-up fade-up-d5">
+      <div class="flex-shrink-0 w-10 h-10 sm:w-14 sm:h-14 rounded-full border-2 border-mtg-border bg-mtg-panel flex items-center justify-center">
         <span class="font-cinzel text-mtg-dim font-bold">6</span>
       </div>
       <div class="pb-10">
@@ -324,7 +325,7 @@ h1, h2, h3, .font-cinzel { font-family: 'Cinzel', serif; }
 </section>
 
 <!-- SWP EXPLAINER -->
-<section class="max-w-4xl mx-auto px-6 py-16 border-t border-mtg-border">
+<section class="max-w-4xl mx-auto px-4 sm:px-6 py-10 sm:py-16 border-t border-mtg-border">
   <div class="text-center mb-12 fade-up">
     <h2 class="font-cinzel text-2xl text-mtg-gold mb-3">The Synergy Web Protocol</h2>
     <p class="text-mtg-dim max-w-2xl mx-auto">
@@ -332,7 +333,7 @@ h1, h2, h3, .font-cinzel { font-family: 'Cinzel', serif; }
     </p>
   </div>
 
-  <div class="grid md:grid-cols-2 gap-5 mb-8">
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-5 mb-8">
     <!-- SD -->
     <div class="dim-card rounded-xl border border-mtg-border p-5 fade-up fade-up-d1">
       <div class="flex items-center gap-3 mb-2">
@@ -395,7 +396,7 @@ h1, h2, h3, .font-cinzel { font-family: 'Cinzel', serif; }
 </section>
 
 <!-- WHY THIS EXISTS -->
-<section class="max-w-4xl mx-auto px-6 py-16 border-t border-mtg-border">
+<section class="max-w-4xl mx-auto px-4 sm:px-6 py-10 sm:py-16 border-t border-mtg-border">
   <div class="max-w-2xl mx-auto text-center fade-up">
     <h2 class="font-cinzel text-2xl text-mtg-gold mb-4">Why This Exists</h2>
     <p class="text-mtg-dim text-sm leading-relaxed mb-4">
@@ -413,9 +414,9 @@ h1, h2, h3, .font-cinzel { font-family: 'Cinzel', serif; }
 <!-- CTA -->
 <section class="max-w-4xl mx-auto px-6 py-20 text-center">
   <div class="fade-up">
-    <h2 class="font-cinzel text-3xl text-white mb-4">Ready to audit your deck?</h2>
-    <p class="text-mtg-dim mb-8 max-w-md mx-auto">Paste your deck list, walk through the framework, and see your synergy profile in minutes.</p>
-    <a href="manabot-insights.html" class="inline-block px-8 py-4 rounded-lg bg-mtg-gold text-mtg-dark font-bold text-lg hover:bg-mtg-accent transition shadow-lg hover:shadow-mtg-gold/20">
+    <h2 class="font-cinzel text-2xl sm:text-3xl text-white mb-4">Ready to audit your deck?</h2>
+    <p class="text-mtg-dim mb-8 max-w-md mx-auto text-sm sm:text-base">Paste your deck list, walk through the framework, and see your synergy profile in minutes.</p>
+    <a href="manabot-insights.html" class="inline-block px-6 py-3 sm:px-8 sm:py-4 rounded-lg bg-mtg-gold text-mtg-dark font-bold text-base sm:text-lg hover:bg-mtg-accent transition shadow-lg hover:shadow-mtg-gold/20">
       Start Your Audit
     </a>
   </div>
