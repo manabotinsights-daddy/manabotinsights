@@ -3080,12 +3080,24 @@ function renderImport() {
         }
         const cmdrData = await fuzzyResp.json();
 
-        // Store commander in STATE
+        // Reset state for a fresh build
         STATE.scryfallData = {};
         STATE.scryfallData[cmdrData.name] = cmdrData;
         STATE.parsedCards = [{ qty: 1, name: cmdrData.name, isCommander: true }];
         STATE.commanderInput = cmdrData.name;
-        STATE.characterSheet.commanderName = cmdrData.name;
+        STATE.characterSheet = {
+          commanderName: cmdrData.name,
+          primaryAbility: '',
+          axis: '',
+          threatLevel: '',
+          bracket: '',
+          winsBy: '',
+          sa: ['','','','',''],
+          saNames: ['','','','','']
+        };
+        STATE.categories = {};
+        STATE.fingers = {};
+        STATE._detectedEngine = null;
         STATE.buildPlanMode = true;
 
         // Go directly to Character Sheet — user can hit AI Assist there
@@ -3182,12 +3194,7 @@ function renderImport() {
     el('div', { className: 'flex-1 h-px bg-mtg-border' }),
   ]));
 
-  container.appendChild(makeInfoBox(
-    'Guide: Importing Your Deck',
-    'Accurate card data is the foundation of every metric in this tool. Scryfall provides oracle text, mana values, type lines, and color identity for every card — this powers the auto-categorization engine and every calculation downstream.',
-    'Paste your full deck list from Archidekt (Export → Text), Moxfield (Export → Text), or type it manually. Enter your commander name in the dedicated box above the deck list — this ensures it\'s correctly identified even if the name is ambiguous (e.g. "Ezuri" matches multiple cards). Double-faced cards work with either the full name or just the front face.',
-    'After fetching, every card in your deck will have its complete Scryfall data loaded. The tool will auto-detect lands vs. spells, identify your commander, and run an initial categorization pass before you even reach Step 2.'
-  ));
+
 
   // Commander Name Input
   const cmdrBox = el('div', { className: 'mb-4 rounded-lg border border-mtg-gold/40 bg-mtg-gold/5 p-4' });
@@ -4389,6 +4396,91 @@ function makeFeedbackBox(stepName, prompt) {
 // ============================================================
 // STEP 3: CATEGORIZE
 // ============================================================
+// ============================================================
+// ADD CARD TO DECK — Fetch from Scryfall, auto-categorize, guardrail check
+// ============================================================
+async function addCardToDeck(cardName, statusEl) {
+  // Check if already in deck
+  if (STATE.parsedCards.some(c => c.name.toLowerCase() === cardName.toLowerCase())) {
+    statusEl.innerHTML = `<span class="text-yellow-400 text-xs">${cardName} is already in your deck.</span>`;
+    return;
+  }
+
+  statusEl.innerHTML = `<span class="text-mtg-gold text-xs">Adding ${cardName}...</span>`;
+
+  try {
+    // Fetch from Scryfall
+    const resp = await fetch(`https://api.scryfall.com/cards/named?exact=${encodeURIComponent(cardName)}`);
+    if (!resp.ok) {
+      // Try fuzzy
+      const fuzzyResp = await fetch(`https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(cardName)}`);
+      if (!fuzzyResp.ok) throw new Error(`Card "${cardName}" not found.`);
+      const data = await fuzzyResp.json();
+      cardName = data.name;
+      STATE.scryfallData[cardName] = data;
+    } else {
+      const data = await resp.json();
+      cardName = data.name;
+      STATE.scryfallData[cardName] = data;
+    }
+
+    // Add to parsed cards
+    STATE.parsedCards.push({ qty: 1, name: cardName, isCommander: false });
+
+    // Auto-categorize
+    const cat = autoCategorize(cardName, false);
+    if (cat) STATE.categories[cardName] = cat;
+
+    // Run SA auto-assign for this card
+    autoAssignSACategories();
+
+    // Auto-score fingers
+    STATE.fingers[cardName] = autoScoreFingers(cardName);
+
+    // Hard guardrail check — warn if the assigned category is full
+    const assignedCat = STATE.categories[cardName]?.primary;
+    if (assignedCat) {
+      const counts = calcCategoryCounts();
+      const profile = getProfile();
+      const cs = STATE.characterSheet;
+      let max = null;
+      if (assignedCat === 'Ramp') max = profile.ramp[1];
+      else if (assignedCat === 'Velocity') max = profile.velocity[1];
+      else if (assignedCat === 'Interaction') max = profile.interaction[1];
+      else if (assignedCat === 'Wipe') max = profile.wipe[1];
+      else if (assignedCat === 'Land') max = profile.lands[1];
+      else if (assignedCat.startsWith('SA-')) max = 12;
+
+      if (max && counts[assignedCat] > max) {
+        const catName = catDisplayName(assignedCat);
+        statusEl.innerHTML = `<div class="mt-2 p-3 rounded border border-yellow-500/40 bg-yellow-500/10 text-xs">
+          <div class="font-semibold text-yellow-400 mb-1">⚠ ${catName} is over target (${counts[assignedCat]}/${max})</div>
+          <div class="text-mtg-dim">${cardName} was added as ${catName}. Consider assigning it to an underfilled category, or replacing an existing ${catName} card.</div>
+        </div>`;
+        // Still re-render to show the card in the table
+        render();
+        return;
+      }
+    }
+
+    // Check total deck size
+    const deckTotal = STATE.parsedCards.filter(c => !c.isCommander).reduce((s,c) => s + c.qty, 0);
+    if (deckTotal > 99) {
+      statusEl.innerHTML = `<div class="mt-2 p-3 rounded border border-red-500/40 bg-red-500/10 text-xs">
+        <div class="font-semibold text-red-400 mb-1">⚠ Deck is over 99 cards (${deckTotal}/99)</div>
+        <div class="text-mtg-dim">${cardName} was added. You'll need to cut ${deckTotal - 99} card${deckTotal - 99 > 1 ? 's' : ''} to reach 99.</div>
+      </div>`;
+      render();
+      return;
+    }
+
+    // Success — re-render
+    render();
+  } catch (e) {
+    statusEl.innerHTML = `<span class="text-red-400 text-xs">${e.message}</span>`;
+  }
+}
+
 function renderCategorize() {
   // Auto-assign uncategorized cards to SA categories based on Step 2 definitions
   autoAssignSACategories();
@@ -4398,6 +4490,108 @@ function renderCategorize() {
   const cs = STATE.characterSheet;
 
   container.appendChild(el('h2', { className: 'font-cinzel text-2xl text-mtg-gold mb-2' }, ['Card Categorization']));
+
+  // ==========================================
+  // CARD SEARCH & ADD — Scryfall-powered inline card builder
+  // ==========================================
+  const searchSection = el('div', { className: 'mb-5 p-4 rounded-xl border border-mtg-gold/40 bg-mtg-panel' });
+
+  // Deck size indicator
+  const deckTotal = STATE.parsedCards.filter(c => !c.isCommander).reduce((s,c) => s + c.qty, 0);
+  const landTotal = STATE.parsedCards.filter(c => !c.isCommander && isLandCard(c.name)).reduce((s,c) => s + c.qty, 0);
+  const spellTotal = deckTotal - landTotal;
+  const deckCountColor = deckTotal === 99 ? 'text-green-400' : deckTotal > 99 ? 'text-red-400' : 'text-mtg-gold';
+  searchSection.appendChild(el('div', { className: 'flex items-center justify-between mb-3' }, [
+    el('div', { className: 'text-sm font-semibold text-white' }, ['Add Cards to Your Deck']),
+    el('div', { className: `text-sm font-bold ${deckCountColor}` }, [`${deckTotal}/99 cards (${spellTotal} spells · ${landTotal} lands)`])
+  ]));
+
+  // Category progress bars with hard guardrails
+  const counts = calcCategoryCounts();
+  const profile = getProfile();
+  const progressGrid = el('div', { className: 'grid grid-cols-2 sm:grid-cols-5 gap-2 mb-4' });
+  const coreTargets = [
+    { cat: 'Ramp', min: profile.ramp[0], max: profile.ramp[1] },
+    { cat: 'Velocity', min: profile.velocity[0], max: profile.velocity[1] },
+    { cat: 'Interaction', min: profile.interaction[0], max: profile.interaction[1] },
+    { cat: 'Wipe', min: profile.wipe[0], max: profile.wipe[1] },
+    { cat: 'Land', min: profile.lands[0], max: profile.lands[1] }
+  ];
+  // Add SA categories
+  for (let i = 0; i < 5; i++) {
+    if (cs.saNames[i]) {
+      coreTargets.push({ cat: `SA-${i+1}`, min: 6, max: 12 });
+    }
+  }
+  coreTargets.forEach(t => {
+    const count = counts[t.cat] || 0;
+    const pct = Math.min((count / t.max) * 100, 100);
+    const isFull = count >= t.max;
+    const isLow = count < t.min;
+    const barColor = isFull ? '#f97316' : isLow ? '#ef4444' : '#22c55e';
+    const statusText = isFull ? 'FULL' : isLow ? `need ${t.min - count} more` : 'on track';
+    const label = catDisplayName(t.cat);
+
+    const barBox = el('div', { className: 'text-center' });
+    barBox.appendChild(el('div', { className: 'text-[10px] text-mtg-dim truncate mb-0.5' }, [label]));
+    barBox.appendChild(el('div', { className: 'text-xs font-bold', style: `color:${barColor}` }, [`${count}/${t.min}-${t.max}`]));
+    const track = el('div', { className: 'h-1.5 rounded-full bg-mtg-border mt-0.5 overflow-hidden' });
+    track.appendChild(el('div', { className: 'h-full rounded-full transition-all', style: `width:${pct}%; background:${barColor}` }));
+    barBox.appendChild(track);
+    barBox.appendChild(el('div', { className: 'text-[9px] mt-0.5', style: `color:${barColor}` }, [statusText]));
+    progressGrid.appendChild(barBox);
+  });
+  searchSection.appendChild(progressGrid);
+
+  // Search input + results
+  const searchRow = el('div', { className: 'flex gap-2' });
+  const searchInput = el('input', {
+    type: 'text',
+    className: 'flex-1 rounded-lg border px-3 py-2 text-sm',
+    placeholder: 'Search for a card (e.g., Sol Ring, Swords to Plowshares)...'
+  });
+  const searchResults = el('div', { className: 'search-results mt-2' });
+
+  let searchTimeout = null;
+  searchInput.addEventListener('input', () => {
+    clearTimeout(searchTimeout);
+    const query = searchInput.value.trim();
+    if (query.length < 2) { searchResults.innerHTML = ''; return; }
+    searchTimeout = setTimeout(async () => {
+      searchResults.innerHTML = '<span class="text-mtg-gold text-xs">Searching...</span>';
+      try {
+        const resp = await fetch(`https://api.scryfall.com/cards/autocomplete?q=${encodeURIComponent(query)}`);
+        if (!resp.ok) throw new Error('Search failed');
+        const data = await resp.json();
+        const names = (data.data || []).slice(0, 8);
+        searchResults.innerHTML = '';
+        if (names.length === 0) {
+          searchResults.innerHTML = '<span class="text-mtg-dim text-xs">No results found.</span>';
+          return;
+        }
+        names.forEach(name => {
+          const alreadyInDeck = STATE.parsedCards.some(c => c.name.toLowerCase() === name.toLowerCase());
+          const resultRow = el('div', {
+            className: `flex items-center justify-between px-3 py-2 rounded cursor-pointer transition text-sm ${alreadyInDeck ? 'opacity-50 bg-mtg-dark/20' : 'hover:bg-mtg-gold/10 card-hover border border-transparent'}`,
+            onClick: async () => {
+              if (alreadyInDeck) return;
+              await addCardToDeck(name, searchResults);
+            }
+          });
+          resultRow.appendChild(el('span', { className: 'text-white' }, [name]));
+          resultRow.appendChild(el('span', { className: `text-xs ${alreadyInDeck ? 'text-mtg-dim' : 'text-mtg-gold'}` }, [alreadyInDeck ? 'already in deck' : '+ Add']));
+          searchResults.appendChild(resultRow);
+        });
+      } catch (e) {
+        searchResults.innerHTML = `<span class="text-red-400 text-xs">${e.message}</span>`;
+      }
+    }, 300);
+  });
+
+  searchRow.appendChild(searchInput);
+  searchSection.appendChild(searchRow);
+  searchSection.appendChild(searchResults);
+  container.appendChild(searchSection);
 
   // AI Auto-Fill banner
   const uncatCount = STATE.parsedCards.filter(c => {
@@ -4513,7 +4707,7 @@ function renderCategorize() {
   header.appendChild(el('div', { className: 'col-span-2 hidden md:block' }, ['Type']));
   header.appendChild(el('div', { className: 'col-span-2 md:col-span-2' }, ['Primary']));
   header.appendChild(el('div', { className: 'col-span-2 md:col-span-2' }, ['Secondary']));
-  header.appendChild(el('div', { className: 'col-span-1 text-center hidden md:block' }, ['Info']));
+  header.appendChild(el('div', { className: 'col-span-1 text-center hidden md:block' }, ['']));
   table.appendChild(header);
 
   nonLand.forEach(c => {
@@ -4551,7 +4745,31 @@ function renderCategorize() {
       if (cat.primary === ct) opt.selected = true;
       priSelect.appendChild(opt);
     });
-    priSelect.addEventListener('change', e => { cat.primary = e.target.value; STATE.userEdited[c.name] = true; render(); });
+    priSelect.addEventListener('change', e => {
+      // Hard guardrail: warn if target category is full
+      const newCat = e.target.value;
+      if (newCat) {
+        const curCounts = calcCategoryCounts();
+        let catMax = null;
+        if (newCat === 'Ramp') catMax = profile.ramp[1];
+        else if (newCat === 'Velocity') catMax = profile.velocity[1];
+        else if (newCat === 'Interaction') catMax = profile.interaction[1];
+        else if (newCat === 'Wipe') catMax = profile.wipe[1];
+        else if (newCat.startsWith('SA-')) catMax = 12;
+        // Count what it WILL be after this change (current count + 1 since this card is moving here)
+        const futureCount = (curCounts[newCat] || 0) + 1;
+        if (catMax && futureCount > catMax) {
+          const catLabel = catDisplayName(newCat);
+          if (!confirm(`${catLabel} is at capacity (${curCounts[newCat]}/${catMax}). Adding ${c.name} will exceed the target. Continue anyway?`)) {
+            e.target.value = cat.primary; // revert
+            return;
+          }
+        }
+      }
+      cat.primary = newCat;
+      STATE.userEdited[c.name] = true;
+      render();
+    });
     row.appendChild(priSelect);
 
     // Secondary Category
@@ -4565,19 +4783,56 @@ function renderCategorize() {
     secSelect.addEventListener('change', e => { cat.secondary = e.target.value; STATE.userEdited[c.name] = true; render(); });
     row.appendChild(secSelect);
 
-    // Info button (hidden on mobile — tap card name instead)
-    const infoBtn = el('div', { className: 'card-info col-span-1 text-center hidden md:block' });
-    const oBtn = el('button', {
+    // Remove button + View
+    const actionCol = el('div', { className: 'card-info col-span-1 text-center hidden md:flex md:gap-1 md:justify-center' });
+    actionCol.appendChild(el('button', {
       className: 'text-mtg-dim hover:text-mtg-gold text-xs',
       onClick: () => showCardModal(c.name)
-    }, ['View']);
-    infoBtn.appendChild(oBtn);
-    row.appendChild(infoBtn);
+    }, ['View']));
+    actionCol.appendChild(el('button', {
+      className: 'text-mtg-dim hover:text-red-400 text-xs ml-1',
+      onClick: () => {
+        if (!confirm(`Remove ${c.name} from your deck?`)) return;
+        STATE.parsedCards = STATE.parsedCards.filter(p => p.name !== c.name);
+        delete STATE.categories[c.name];
+        delete STATE.fingers[c.name];
+        delete STATE.userEdited[c.name];
+        render();
+      }
+    }, ['×']));
+    row.appendChild(actionCol);
 
     table.appendChild(row);
   });
 
   container.appendChild(table);
+
+  // Land section — collapsible list of lands in the deck
+  const lands = STATE.parsedCards.filter(c => !c.isCommander && isLandCard(c.name));
+  if (lands.length > 0) {
+    const landDetails = el('details', { className: 'mt-4 rounded-lg border border-mtg-border p-3' });
+    landDetails.appendChild(el('summary', { className: 'text-sm font-semibold text-mtg-dim cursor-pointer select-none' }, [`Lands (${lands.reduce((s,c) => s + c.qty, 0)})`]));
+    const landList = el('div', { className: 'mt-2 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-1' });
+    lands.forEach(c => {
+      const landRow = el('div', { className: 'flex items-center justify-between px-2 py-1 rounded hover:bg-mtg-gold/5 text-xs' });
+      const nameSpan = el('span', { className: 'text-white truncate' }, [c.qty > 1 ? `${c.qty}x ${c.name}` : c.name]);
+      const removeBtn = el('button', {
+        className: 'text-mtg-dim hover:text-red-400 ml-2 flex-shrink-0',
+        onClick: () => {
+          if (!confirm(`Remove ${c.name} from your deck?`)) return;
+          STATE.parsedCards = STATE.parsedCards.filter(p => p.name !== c.name);
+          delete STATE.categories[c.name];
+          render();
+        }
+      }, ['×']);
+      landRow.appendChild(nameSpan);
+      landRow.appendChild(removeBtn);
+      landList.appendChild(landRow);
+    });
+    landDetails.appendChild(landList);
+    container.appendChild(landDetails);
+  }
+
   container.appendChild(makeFeedbackBox('categorize', 'How does the categorization process feel? Too tedious? Missing options? Confusing categories?'));
   container.appendChild(navButtons(true, true));
   app.appendChild(container);
