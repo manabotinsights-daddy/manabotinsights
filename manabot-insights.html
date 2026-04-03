@@ -146,7 +146,7 @@ select:focus, input:focus, textarea:focus { border-color: #d4a843 !important; ou
     <a href="index.html" class="text-mtg-dim hover:text-mtg-gold transition text-xs border border-mtg-border rounded px-2.5 py-1 hover:border-mtg-gold/50" title="Back to Home">&larr; Home</a>
     <div>
       <h1 class="font-cinzel text-mtg-gold text-xl tracking-wide">Manabot Insights</h1>
-      <p class="text-mtg-dim text-xs mt-0.5">Deck Audit Tool — Beta v0.2</p>
+      <p class="text-mtg-dim text-xs mt-0.5">Deck Audit Tool — Beta v0.3-cors-fix</p>
     </div>
   </div>
   <div class="flex items-center gap-3">
@@ -1797,7 +1797,9 @@ function renderImport() {
         }
         urlStatus.innerHTML = '<span class="text-green-400">Deck imported! Review below and click "Fetch Card Data" to continue.</span>';
       } catch (e) {
-        urlStatus.innerHTML = `<span class="text-red-400">${e.message}</span>`;
+        logError('FETCH', `Import failed for URL: ${url}`, { error: e.message, stack: e.stack?.split('\n').slice(0,3).join('\n') });
+        urlStatus.innerHTML = `<span class="text-red-400">${e.message}</span>`
+          + `<br><span class="text-orange-400 text-xs">Check the <button onclick="toggleErrorLog()" class="underline text-orange-300">Error Log</button> for details.</span>`;
       }
       urlBtn.disabled = false;
       urlBtn.textContent = 'Import';
