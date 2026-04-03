@@ -498,13 +498,28 @@ const SAMPLE_DECK = {
 async function fetchDeckFromURL(url) {
   url = url.trim();
 
+  // CORS proxy — needed because Archidekt/Moxfield APIs don't allow cross-origin from static sites
+  async function corsProxy(apiUrl) {
+    // Try direct first (works in dev/localhost), fall back to proxy
+    try {
+      const direct = await fetch(apiUrl);
+      if (direct.ok) return await direct.json();
+    } catch (e) { /* CORS blocked — expected, use proxy */ }
+
+    // Use allorigins as CORS proxy
+    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(apiUrl)}`;
+    const proxyResp = await fetch(proxyUrl);
+    if (!proxyResp.ok) throw new Error('Could not reach the deck. Check the URL and try again.');
+    const proxyData = await proxyResp.json();
+    if (!proxyData.contents) throw new Error('Empty response. Make sure the deck is public.');
+    return JSON.parse(proxyData.contents);
+  }
+
   // Moxfield: https://www.moxfield.com/decks/DECKID
   const moxMatch = url.match(/moxfield\.com\/decks\/([a-zA-Z0-9_-]+)/);
   if (moxMatch) {
     const deckId = moxMatch[1];
-    const resp = await fetch(`https://api2.moxfield.com/v3/decks/all/${deckId}`);
-    if (!resp.ok) throw new Error('Could not fetch Moxfield deck. Make sure the deck is public.');
-    const data = await resp.json();
+    const data = await corsProxy(`https://api2.moxfield.com/v3/decks/all/${deckId}`);
     let lines = [];
     let cmdrName = '';
     // Commanders
@@ -522,6 +537,7 @@ async function fetchDeckFromURL(url) {
         if (name) lines.push(`${qty} ${name}`);
       });
     }
+    if (lines.length === 0) throw new Error('Deck appears empty. Make sure the deck is public and not empty.');
     return { text: lines.join('\n'), commander: cmdrName };
   }
 
@@ -529,9 +545,7 @@ async function fetchDeckFromURL(url) {
   const archiMatch = url.match(/archidekt\.com\/(?:api\/)?decks\/(\d+)/);
   if (archiMatch) {
     const deckId = archiMatch[1];
-    const resp = await fetch(`https://archidekt.com/api/decks/${deckId}/`);
-    if (!resp.ok) throw new Error('Could not fetch Archidekt deck. Make sure the deck is public.');
-    const data = await resp.json();
+    const data = await corsProxy(`https://archidekt.com/api/decks/${deckId}/`);
     let lines = [];
     let cmdrName = '';
     if (data.cards) {
@@ -547,10 +561,11 @@ async function fetchDeckFromURL(url) {
         }
       });
     }
+    if (lines.length === 0) throw new Error('Deck appears empty. Make sure the deck is public.');
     return { text: lines.join('\n'), commander: cmdrName };
   }
 
-  throw new Error('URL not recognized. Paste a Moxfield or Archidekt deck URL.');
+  throw new Error('URL not recognized. Paste a Moxfield or Archidekt deck URL (e.g., https://archidekt.com/decks/12345 or https://www.moxfield.com/decks/abc123).');
 }
 
 // ============================================================
