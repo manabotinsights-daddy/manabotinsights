@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Manabot Insights — Deck Audit Tool (Beta)</title>
+<!-- Analytics: replace data-domain with your actual domain once registered -->
+<!-- <script defer data-domain="manabotinsights.com" src="https://plausible.io/js/script.js"></script> -->
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
 tailwind.config = {
@@ -133,7 +135,7 @@ select:focus, input:focus, textarea:focus { border-color: #d4a843 !important; ou
 .fade-in { animation: fadeIn 0.3s ease-in; }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 .tooltip { position: relative; }
-.tooltip:hover::after { content: attr(data-tip); position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); background: #2a2f3e; color: #e2e8f0; padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; white-space: nowrap; z-index: 50; }
+.tooltip:hover::after { content: attr(data-tip); position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); background: #2a2f3e; color: #e2e8f0; padding: 6px 10px; border-radius: 6px; font-size: 0.7rem; white-space: normal; max-width: 220px; z-index: 50; line-height: 1.3; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
 </style>
 </head>
 <body class="min-h-screen">
@@ -144,10 +146,13 @@ select:focus, input:focus, textarea:focus { border-color: #d4a843 !important; ou
     <a href="index.html" class="text-mtg-dim hover:text-mtg-gold transition text-xs border border-mtg-border rounded px-2.5 py-1 hover:border-mtg-gold/50" title="Back to Home">&larr; Home</a>
     <div>
       <h1 class="font-cinzel text-mtg-gold text-xl tracking-wide">Manabot Insights</h1>
-      <p class="text-mtg-dim text-xs mt-0.5">Deck Audit Tool — Beta v0.1</p>
+      <p class="text-mtg-dim text-xs mt-0.5">Deck Audit Tool — Beta v0.2</p>
     </div>
   </div>
-  <div id="step-nav" class="flex items-center gap-3"></div>
+  <div class="flex items-center gap-3">
+    <div id="step-nav" class="flex items-center gap-3"></div>
+    <button id="new-audit-btn" class="hidden text-xs border border-mtg-border rounded px-2.5 py-1 text-mtg-dim hover:text-red-400 hover:border-red-400/50 transition ml-2" title="Clear session and start a new audit" onclick="if(confirm('Start a new audit? Current progress will be cleared.')){clearSavedState();location.reload();}">New</button>
+  </div>
 </header>
 
 <!-- MAIN -->
@@ -367,6 +372,187 @@ function showCardModal(name) {
   $('#card-modal').classList.add('flex');
 }
 
+// Help icon tooltip helper
+function helpTip(text) {
+  const span = el('span', {
+    className: 'tooltip inline-flex items-center justify-center w-4 h-4 rounded-full border border-mtg-dim/40 text-mtg-dim text-[0.55rem] cursor-help ml-1 hover:border-mtg-gold hover:text-mtg-gold transition',
+    'data-tip': text
+  }, ['?']);
+  return span;
+}
+
+// TCGplayer affiliate link — replace YOUR_AFFILIATE_ID with your actual partner ID
+const TCGPLAYER_AFFILIATE = ''; // Set your TCGplayer affiliate partner ID here (e.g. 'ManabotInsights')
+function tcgplayerURL(cardName) {
+  const base = 'https://www.tcgplayer.com/search/magic/product';
+  const params = `?q=${encodeURIComponent(frontFaceName(cardName))}&view=grid`;
+  const aff = TCGPLAYER_AFFILIATE ? `&partner=${TCGPLAYER_AFFILIATE}&utm_campaign=affiliate&utm_medium=ManabotInsights&utm_source=ManabotInsights` : '';
+  return base + params + aff;
+}
+
+// Renders a card name element with clickable image preview + TCGplayer link icon
+function cardNameEl(name, extraClasses = '') {
+  const wrapper = el('div', { className: `card-name-wrap flex items-center gap-1.5 ${extraClasses}` });
+  const nameSpan = el('span', {
+    className: 'cursor-pointer hover:text-mtg-gold truncate',
+    onClick: () => showCardModal(name)
+  }, [name]);
+  wrapper.appendChild(nameSpan);
+  const link = el('a', {
+    href: tcgplayerURL(name),
+    target: '_blank',
+    rel: 'noopener noreferrer',
+    className: 'text-mtg-dim hover:text-mtg-gold text-xs flex-shrink-0 opacity-50 hover:opacity-100 transition',
+    title: 'View on TCGplayer'
+  }, ['$']);
+  wrapper.appendChild(link);
+  return wrapper;
+}
+
+// ============================================================
+// SAMPLE DECK — pre-loaded for first-time users
+// ============================================================
+const SAMPLE_DECK = {
+  commander: 'Lathril, Blade of the Elves',
+  text: `1 Lathril, Blade of the Elves *CMDR*
+1 Sol Ring
+1 Elvish Archdruid
+1 Priest of Titania
+1 Beast Whisperer
+1 Wolverine Riders
+1 Sylvan Library
+1 Craterhoof Behemoth
+1 Heroic Intervention
+1 Llanowar Elves
+1 Fyndhorn Elves
+1 Elvish Mystic
+1 Arbor Elf
+1 Elves of Deep Shadow
+1 Deathrite Shaman
+1 Imperious Perfect
+1 Elvish Warmaster
+1 Canopy Tactician
+1 Marwyn, the Nurturer
+1 Circle of Dreams Druid
+1 Growing Rites of Itlimoc
+1 Rhystic Study
+1 Skullclamp
+1 Phyrexian Arena
+1 Harmonize
+1 Return of the Wildspeaker
+1 Shamanic Revelation
+1 Kindred Dominance
+1 Toxic Deluge
+1 Beast Within
+1 Assassin's Trophy
+1 Abrupt Decay
+1 Nature's Claim
+1 Swords to Plowshares
+1 Path of Exile
+1 Fierce Empath
+1 Wood Elves
+1 Farhaven Elf
+1 Springbloom Druid
+1 Timberwatch Elf
+1 Ezuri, Renegade Leader
+1 Elderfang Ritualist
+1 Shaman of the Pack
+1 Poison-Tip Archer
+1 Zulaport Cutthroat
+1 Moldervine Reclamation
+1 Pact of the Serpent
+1 Tyvar Kell
+1 Harald Unites the Elves
+1 Coat of Arms
+1 Vanquisher's Banner
+1 Herald's Horn
+1 Door of Destinies
+1 Arcane Signet
+1 Golgari Signet
+1 Talisman of Resilience
+1 Command Tower
+1 Blooming Marsh
+1 Woodland Cemetery
+1 Overgrown Tomb
+1 Llanowar Wastes
+1 Golgari Rot Farm
+1 Undergrowth Stadium
+1 Gilt-Leaf Palace
+1 Twilight Mire
+1 Wirewood Lodge
+1 Gaea's Cradle
+1 Nykthos, Shrine to Nyx
+12 Forest
+5 Swamp
+1 Jungle Hollow
+1 Foul Orchard
+1 Temple of Malady
+1 Verdant Catacombs
+1 Polluted Mire
+1 Tranquil Thicket`
+};
+
+// ============================================================
+// URL IMPORT — fetch deck from Moxfield or Archidekt URL
+// ============================================================
+async function fetchDeckFromURL(url) {
+  url = url.trim();
+
+  // Moxfield: https://www.moxfield.com/decks/DECKID
+  const moxMatch = url.match(/moxfield\.com\/decks\/([a-zA-Z0-9_-]+)/);
+  if (moxMatch) {
+    const deckId = moxMatch[1];
+    const resp = await fetch(`https://api2.moxfield.com/v3/decks/all/${deckId}`);
+    if (!resp.ok) throw new Error('Could not fetch Moxfield deck. Make sure the deck is public.');
+    const data = await resp.json();
+    let lines = [];
+    let cmdrName = '';
+    // Commanders
+    if (data.commanders) {
+      Object.values(data.commanders).forEach(entry => {
+        const name = entry.card?.name || entry.name || '';
+        if (name) { lines.push(`1 ${name} *CMDR*`); cmdrName = name; }
+      });
+    }
+    // Mainboard
+    if (data.mainboard) {
+      Object.values(data.mainboard).forEach(entry => {
+        const name = entry.card?.name || entry.name || '';
+        const qty = entry.quantity || 1;
+        if (name) lines.push(`${qty} ${name}`);
+      });
+    }
+    return { text: lines.join('\n'), commander: cmdrName };
+  }
+
+  // Archidekt: https://archidekt.com/decks/DECKID or /api/decks/DECKID/
+  const archiMatch = url.match(/archidekt\.com\/(?:api\/)?decks\/(\d+)/);
+  if (archiMatch) {
+    const deckId = archiMatch[1];
+    const resp = await fetch(`https://archidekt.com/api/decks/${deckId}/`);
+    if (!resp.ok) throw new Error('Could not fetch Archidekt deck. Make sure the deck is public.');
+    const data = await resp.json();
+    let lines = [];
+    let cmdrName = '';
+    if (data.cards) {
+      data.cards.forEach(entry => {
+        const name = entry.card?.oracleCard?.name || entry.card?.name || '';
+        const qty = entry.quantity || 1;
+        const cats = (entry.categories || []).map(c => c.toLowerCase());
+        if (cats.includes('commander')) {
+          lines.push(`${qty} ${name} *CMDR*`);
+          cmdrName = name;
+        } else if (!cats.includes('sideboard') && !cats.includes('maybeboard')) {
+          lines.push(`${qty} ${name}`);
+        }
+      });
+    }
+    return { text: lines.join('\n'), commander: cmdrName };
+  }
+
+  throw new Error('URL not recognized. Paste a Moxfield or Archidekt deck URL.');
+}
+
 // ============================================================
 // DECK PARSER
 // ============================================================
@@ -442,9 +628,34 @@ async function fetchFromScryfall(cards) {
   }
   const data = {};
   const errors = [];
+
+  // Retry helper — retries up to maxRetries times with exponential backoff
+  async function fetchWithRetry(url, options, maxRetries = 3) {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const resp = await fetch(url, options);
+        if (resp.status === 429) {
+          // Rate limited — wait and retry
+          const retryAfter = parseInt(resp.headers.get('retry-after') || '2') * 1000;
+          await new Promise(r => setTimeout(r, retryAfter));
+          continue;
+        }
+        if (!resp.ok && attempt < maxRetries) {
+          await new Promise(r => setTimeout(r, 500 * Math.pow(2, attempt)));
+          continue;
+        }
+        return resp;
+      } catch (e) {
+        if (attempt === maxRetries) throw e;
+        await new Promise(r => setTimeout(r, 500 * Math.pow(2, attempt)));
+      }
+    }
+    throw new Error('Max retries exceeded');
+  }
+
   for (const batch of batches) {
     try {
-      const resp = await fetch('https://api.scryfall.com/cards/collection', {
+      const resp = await fetchWithRetry('https://api.scryfall.com/cards/collection', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ identifiers: batch.map(n => ({ name: n })) })
@@ -1294,6 +1505,9 @@ function renderStepNav() {
     nav.appendChild(dot);
     if (i < STEPS.length - 1) nav.appendChild(el('div', { className: 'step-connector w-3 sm:w-6 h-px bg-mtg-border' }));
   });
+  // Show/hide New Audit button based on whether there's active data
+  const newBtn = document.getElementById('new-audit-btn');
+  if (newBtn) newBtn.classList.toggle('hidden', STATE.parsedCards.length === 0);
 }
 
 function furthestStep() {
@@ -1330,7 +1544,73 @@ function renderImport() {
   const container = el('div', { className: 'fade-in max-w-3xl mx-auto' });
 
   container.appendChild(el('h2', { className: 'font-cinzel text-2xl text-mtg-gold mb-2' }, ['Import Your Deck']));
-  container.appendChild(el('p', { className: 'text-mtg-dim text-sm mb-4' }, ['Enter your commander below, then paste your deck list. Supports Archidekt, Moxfield, and standard formats like "1x Sol Ring" or "1 Sol Ring".']));
+  container.appendChild(el('p', { className: 'text-mtg-dim text-sm mb-4' }, ['Import from Moxfield/Archidekt URL, or paste your deck list manually.']));
+
+  // URL Import Box
+  const urlBox = el('div', { className: 'mb-5 p-4 rounded-lg border border-mtg-border bg-mtg-panel' });
+  urlBox.appendChild(el('label', { className: 'block text-sm font-semibold text-white mb-1.5' }, ['Import from URL']));
+  const urlRow = el('div', { className: 'flex gap-2' });
+  const urlInput = el('input', {
+    type: 'url',
+    className: 'flex-1 rounded-lg border px-4 py-2.5 text-sm',
+    placeholder: 'https://www.moxfield.com/decks/... or https://archidekt.com/decks/...'
+  });
+  const urlBtn = el('button', {
+    className: 'px-4 py-2.5 rounded-lg bg-mtg-gold text-mtg-dark font-semibold hover:bg-mtg-accent transition text-sm whitespace-nowrap',
+    onClick: async () => {
+      const url = urlInput.value.trim();
+      if (!url) return;
+      const urlStatus = urlBox.querySelector('.url-status') || el('div', { className: 'url-status mt-2 text-sm' });
+      if (!urlBox.querySelector('.url-status')) urlBox.appendChild(urlStatus);
+      urlStatus.innerHTML = '<span class="text-mtg-gold">Fetching deck...</span>';
+      urlBtn.disabled = true;
+      urlBtn.textContent = 'Fetching...';
+      try {
+        const result = await fetchDeckFromURL(url);
+        textarea.value = result.text;
+        STATE.rawText = result.text;
+        if (result.commander) {
+          cmdrInput.value = result.commander;
+          STATE.commanderInput = result.commander;
+        }
+        urlStatus.innerHTML = '<span class="text-green-400">Deck imported! Review below and click "Fetch Card Data" to continue.</span>';
+      } catch (e) {
+        urlStatus.innerHTML = `<span class="text-red-400">${e.message}</span>`;
+      }
+      urlBtn.disabled = false;
+      urlBtn.textContent = 'Import';
+    }
+  }, ['Import']);
+  urlRow.appendChild(urlInput);
+  urlRow.appendChild(urlBtn);
+  urlBox.appendChild(urlRow);
+  urlBox.appendChild(el('p', { className: 'text-xs text-mtg-dim mt-1.5' }, ['Works with public decks on Moxfield and Archidekt. The deck must be set to public visibility.']));
+  container.appendChild(urlBox);
+
+  // Quick-start sample deck (show only if no deck loaded yet)
+  if (!STATE.rawText && STATE.parsedCards.length === 0) {
+    const sampleBox = el('div', { className: 'mb-5 p-3 rounded-lg border border-dashed border-mtg-border text-center' });
+    sampleBox.appendChild(el('p', { className: 'text-mtg-dim text-xs mb-2' }, ['First time here? Try the tool with a pre-loaded deck.']));
+    const sampleBtn = el('button', {
+      className: 'px-4 py-2 rounded-lg border border-mtg-gold/50 text-mtg-gold text-sm hover:bg-mtg-gold/10 transition',
+      onClick: () => {
+        textarea.value = SAMPLE_DECK.text;
+        STATE.rawText = SAMPLE_DECK.text;
+        cmdrInput.value = SAMPLE_DECK.commander;
+        STATE.commanderInput = SAMPLE_DECK.commander;
+        sampleBox.innerHTML = '<span class="text-green-400 text-xs">Sample deck loaded! Click "Fetch Card Data" below to continue.</span>';
+      }
+    }, ['Try with Lathril Elf Tribal']);
+    sampleBox.appendChild(sampleBtn);
+    container.appendChild(sampleBox);
+  }
+
+  // Divider
+  container.appendChild(el('div', { className: 'flex items-center gap-3 mb-5' }, [
+    el('div', { className: 'flex-1 h-px bg-mtg-border' }),
+    el('span', { className: 'text-mtg-dim text-xs' }, ['or paste manually']),
+    el('div', { className: 'flex-1 h-px bg-mtg-border' }),
+  ]));
 
   container.appendChild(makeInfoBox(
     'Guide: Importing Your Deck',
@@ -1513,7 +1793,10 @@ function renderImport() {
       const landCount = STATE.parsedCards.filter(c => isLandCard(c.name)).reduce((s,c) => s+c.qty, 0);
       const nonLandCount = getNonLandCards().reduce((s,c) => s+c.qty, 0);
       msg += `<br><span class="text-mtg-dim">${nonLandCount} spells · ${landCount} lands</span>`;
-      if (errors.length > 0) msg += `<br><span class="text-yellow-400">Could not find: ${errors.join(', ')}</span>`;
+      if (errors.length > 0) {
+        msg += `<br><span class="text-yellow-400">Could not find: ${errors.join(', ')}</span>`;
+        msg += `<br><span class="text-mtg-dim text-xs">These cards will be skipped. Check spelling or try re-fetching.</span>`;
+      }
       status.innerHTML = msg;
       btn.disabled = false;
       btn.textContent = 'Fetch Card Data';
@@ -1788,8 +2071,18 @@ function renderCharacterSheet() {
   app.appendChild(container);
 }
 
+const LABEL_TIPS = {
+  'Primary Ability': 'The core mechanical function your commander enables — this drives Commander Signal scoring',
+  'Bracket': 'Power level 1-5. Sets target ratios for lands, ramp, velocity, and interaction',
+  'Threat Level': 'Variable = needs setup to win. Definitive = wins immediately if unanswered',
+  'Axis': 'Enabler = creates conditions for others. Payoff = converts those conditions into wins',
+  'Wins By': 'Your primary win condition strategy (combat damage, combo, mill, etc.)',
+};
+
 function makeLabel(text) {
-  return el('label', { className: 'block text-sm font-semibold text-white mt-2' }, [text]);
+  const label = el('label', { className: 'block text-sm font-semibold text-white mt-2 flex items-center' }, [text]);
+  if (LABEL_TIPS[text]) label.appendChild(helpTip(LABEL_TIPS[text]));
+  return label;
 }
 
 
@@ -1944,8 +2237,9 @@ function renderCategorize() {
 
     const row = el('div', { className: 'card-table-row grid grid-cols-12 gap-2 px-3 py-2 rounded card-hover border border-transparent items-center text-sm' });
 
-    // Name
-    const nameEl = el('div', { className: 'card-name col-span-4 cursor-pointer hover:text-mtg-gold truncate', onClick: () => showCardModal(c.name) }, [c.name]);
+    // Name (with TCGplayer link)
+    const nameEl = el('div', { className: 'card-name col-span-4' });
+    nameEl.appendChild(cardNameEl(c.name, 'truncate'));
     row.appendChild(nameEl);
 
     // MV
@@ -2079,11 +2373,10 @@ function renderScore() {
 
     const row = el('div', { className: 'score-table-row grid grid-cols-12 gap-2 px-3 py-1.5 rounded card-hover border border-transparent items-center text-sm' });
 
-    // Name
-    row.appendChild(el('div', {
-      className: 'score-card-name col-span-4 cursor-pointer hover:text-mtg-gold truncate text-xs',
-      onClick: () => showCardModal(c.name)
-    }, [c.name]));
+    // Name (with TCGplayer link)
+    const scoreNameDiv = el('div', { className: 'score-card-name col-span-4 text-xs' });
+    scoreNameDiv.appendChild(cardNameEl(c.name, 'truncate'));
+    row.appendChild(scoreNameDiv);
 
     // Category pill (hidden on mobile/tablet)
     const catPill = el('div', { className: 'score-cat col-span-1 text-center hidden md:block' });
@@ -2300,8 +2593,12 @@ function renderResults() {
     scored.slice(0, 10).forEach((c, i) => {
       const row = el('div', { className: 'cut-list-row grid grid-cols-12 gap-2 px-3 py-1.5 rounded card-hover border border-transparent items-center text-sm' });
       row.appendChild(el('div', { className: 'col-span-1 text-xs text-mtg-dim hidden sm:block' }, [String(i + 1)]));
-      const nameEl = el('div', { className: 'cut-name col-span-5 cursor-pointer hover:text-mtg-gold truncate', onClick: () => showCardModal(c.name) }, [`${i + 1}. ${c.name}`]);
-      row.appendChild(nameEl);
+      const cutNameDiv = el('div', { className: 'cut-name col-span-5' });
+      const cutNameWrap = cardNameEl(c.name, 'truncate');
+      // Prepend rank number
+      cutNameWrap.insertBefore(el('span', { className: 'text-mtg-dim mr-1' }, [`${i+1}.`]), cutNameWrap.firstChild);
+      cutNameDiv.appendChild(cutNameWrap);
+      row.appendChild(cutNameDiv);
       const catLabel = catDisplayName(c.cat);
       const catColor = CAT_COLORS[c.cat] || '#8b92a8';
       row.appendChild(el('div', { className: 'col-span-2 hidden sm:block' }, [
@@ -2320,9 +2617,17 @@ function renderResults() {
   app.appendChild(container);
 }
 
+const SWP_TIPS = {
+  'Signal Density': 'What % of your 99 directly interacts with your commander\'s primary ability',
+  'Commander Independence': 'How well your deck functions when your commander is removed or unavailable',
+  'Cross-Category Pollination': 'What % of your cards serve 2+ categories, creating interconnected synergies',
+};
+
 function makeDimCard(title, pct, grade, desc) {
   const card = el('div', { className: 'rounded-lg border border-mtg-border p-4 bg-mtg-panel' });
-  card.appendChild(el('div', { className: 'text-xs text-mtg-dim mb-2' }, [title]));
+  const titleRow = el('div', { className: 'text-xs text-mtg-dim mb-2 flex items-center' }, [title]);
+  if (SWP_TIPS[title]) titleRow.appendChild(helpTip(SWP_TIPS[title]));
+  card.appendChild(titleRow);
   const row = el('div', { className: 'flex items-end gap-2 mb-2' });
   row.appendChild(el('div', { className: 'text-3xl font-bold', style: `color:${gradeColor(grade)}` }, [grade]));
   row.appendChild(el('div', { className: 'text-lg text-mtg-dim mb-1' }, [`${pct}%`]));
@@ -2357,7 +2662,7 @@ function renderExport() {
     className: 'w-full mb-3 px-5 py-3 rounded-lg border border-mtg-gold text-mtg-gold hover:bg-mtg-gold/10 transition text-sm font-semibold',
     onClick: () => {
       const exportData = {
-        version: '0.1-beta',
+        version: '0.2-beta',
         exportDate: new Date().toISOString(),
         characterSheet: STATE.characterSheet,
         cards: STATE.parsedCards.map(c => ({
@@ -2453,6 +2758,23 @@ function renderExport() {
   }, ['Copy Summary to Clipboard (for Discord/etc.)']);
   container.appendChild(copyBtn);
 
+  // Share URL
+  const shareBtn = el('button', {
+    className: 'w-full mb-6 px-5 py-3 rounded-lg bg-mtg-gold/10 border border-mtg-gold text-mtg-gold hover:bg-mtg-gold/20 transition text-sm font-semibold',
+    onClick: () => {
+      const url = generateShareURL();
+      navigator.clipboard.writeText(url).then(() => {
+        shareBtn.textContent = 'Link Copied! Share it anywhere.';
+        shareBtn.classList.add('bg-green-500/10', 'border-green-500', 'text-green-400');
+        setTimeout(() => {
+          shareBtn.textContent = 'Copy Shareable Link';
+          shareBtn.classList.remove('bg-green-500/10', 'border-green-500', 'text-green-400');
+        }, 3000);
+      });
+    }
+  }, ['Copy Shareable Link']);
+  container.appendChild(shareBtn);
+
   // Final Feedback
   container.appendChild(el('h3', { className: 'font-cinzel text-lg text-white mb-3' }, ['Overall Feedback']));
   container.appendChild(makeFeedbackBox('overall', 'Any final thoughts on Manabot Insights or the methodology? What would make this more useful?'));
@@ -2466,9 +2788,242 @@ function renderExport() {
 }
 
 // ============================================================
-// INIT
+// SHAREABLE RESULTS URL
 // ============================================================
-render();
+function generateShareURL() {
+  const cs = STATE.characterSheet;
+  const sd = calcSD(), ci = calcCI(), ccp = calcCCP();
+  const avgMV = calcAvgMV();
+  const avgFinger = calcFingerAverages();
+  const counts = calcCategoryCounts();
+  const flags = checkPillars();
+  const shareData = {
+    c: cs.commanderName,
+    b: cs.bracket,
+    ax: cs.axis,
+    th: cs.threatLevel,
+    pa: cs.primaryAbility,
+    wb: cs.winsBy,
+    sa: cs.saNames.filter(n => n),
+    sd: sd, ci: ci, ccp: ccp,
+    mv: avgMV, fg: avgFinger,
+    ct: counts,
+    fl: flags.map(f => f.label),
+    v: '0.1'
+  };
+  const json = JSON.stringify(shareData);
+  const encoded = btoa(unescape(encodeURIComponent(json)));
+  return window.location.origin + window.location.pathname + '?share=' + encoded;
+}
+
+function loadShareData() {
+  const params = new URLSearchParams(window.location.search);
+  const shareParam = params.get('share');
+  if (!shareParam) return null;
+  try {
+    const json = decodeURIComponent(escape(atob(shareParam)));
+    return JSON.parse(json);
+  } catch (e) { return null; }
+}
+
+function renderSharedView(data) {
+  const app = $('#app');
+  app.innerHTML = '';
+  const container = el('div', { className: 'fade-in max-w-3xl mx-auto' });
+
+  // Shared Results Banner
+  const banner = el('div', { className: 'mb-6 p-4 rounded-lg border border-mtg-gold/30 bg-mtg-gold/5 text-center' });
+  banner.appendChild(el('div', { className: 'text-mtg-gold font-cinzel text-sm mb-1' }, ['Shared Deck Audit']));
+  banner.appendChild(el('div', { className: 'text-mtg-dim text-xs' }, ['This is a read-only view of an audit. Run your own audit to get the full interactive experience.']));
+  container.appendChild(banner);
+
+  // Commander Header
+  container.appendChild(el('h2', { className: 'font-cinzel text-2xl text-mtg-gold mb-1' }, [data.c || 'Unknown Commander']));
+  const meta = [];
+  if (data.b) meta.push(`Bracket ${data.b}`);
+  if (data.ax) meta.push(data.ax);
+  if (data.th) meta.push(data.th);
+  container.appendChild(el('p', { className: 'text-mtg-dim text-sm mb-6' }, [meta.join(' · ')]));
+
+  if (data.pa) {
+    container.appendChild(el('div', { className: 'text-sm mb-1' }, [
+      el('span', { className: 'text-mtg-dim' }, ['Primary Ability: ']),
+      el('span', { className: 'text-white font-semibold' }, [data.pa])
+    ]));
+  }
+  if (data.wb) {
+    container.appendChild(el('div', { className: 'text-sm mb-4' }, [
+      el('span', { className: 'text-mtg-dim' }, ['Wins By: ']),
+      el('span', { className: 'text-white font-semibold' }, [data.wb])
+    ]));
+  }
+
+  // SWP Scores
+  const swpGrid = el('div', { className: 'dim-grid grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 mb-6' });
+  const dims = [
+    { label: 'Signal Density', val: data.sd, grade: getSDGrade(parseFloat(data.sd)), desc: 'How strongly your 99 echoes the commander' },
+    { label: 'Commander Independence', val: data.ci, grade: getCIGrade(parseFloat(data.ci)), desc: 'How well the deck functions without the commander' },
+    { label: 'Cross-Cat Pollination', val: data.ccp, grade: getCCPGrade(parseFloat(data.ccp)), desc: 'How interconnected your categories are' },
+  ];
+  dims.forEach(d => {
+    const card = el('div', { className: 'p-4 rounded-lg bg-mtg-panel border border-mtg-border text-center' });
+    card.appendChild(el('div', { className: 'text-xs text-mtg-dim mb-1' }, [d.label]));
+    card.appendChild(el('div', { className: 'text-2xl font-bold text-mtg-gold' }, [`${d.val}%`]));
+    card.appendChild(el('div', { className: 'text-sm font-semibold text-white' }, [d.grade]));
+    card.appendChild(el('div', { className: 'text-xs text-mtg-dim mt-1' }, [d.desc]));
+    swpGrid.appendChild(card);
+  });
+  container.appendChild(swpGrid);
+
+  // Stats bar
+  const statsBar = el('div', { className: 'flex justify-center gap-6 mb-6 text-sm' });
+  statsBar.appendChild(el('div', { className: 'text-center' }, [
+    el('div', { className: 'text-mtg-dim text-xs' }, ['Avg MV']),
+    el('div', { className: 'text-white font-bold' }, [String(data.mv)])
+  ]));
+  statsBar.appendChild(el('div', { className: 'text-center' }, [
+    el('div', { className: 'text-mtg-dim text-xs' }, ['Avg 5-Finger']),
+    el('div', { className: 'text-white font-bold' }, [String(data.fg)])
+  ]));
+  container.appendChild(statsBar);
+
+  // Category Counts
+  if (data.ct) {
+    const ratioGrid = el('div', { className: 'results-ratio-grid grid grid-cols-3 sm:grid-cols-5 gap-2 sm:gap-3 mb-6' });
+    ['Velocity','Ramp','Interaction','Wipe','Land'].forEach(cat => {
+      if (data.ct[cat] !== undefined) {
+        ratioGrid.appendChild(el('div', { className: 'text-center p-2 rounded bg-mtg-panel border border-mtg-border' }, [
+          el('div', { className: 'text-xs text-mtg-dim' }, [cat]),
+          el('div', { className: 'text-lg font-bold text-white' }, [String(data.ct[cat])])
+        ]));
+      }
+    });
+    container.appendChild(ratioGrid);
+
+    // SA Counts
+    if (data.sa && data.sa.length > 0) {
+      const saGrid = el('div', { className: 'results-sa-grid grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 sm:gap-3 mb-6' });
+      data.sa.forEach((name, i) => {
+        const key = `SA-${i+1}`;
+        if (data.ct[key] !== undefined) {
+          saGrid.appendChild(el('div', { className: 'text-center p-2 rounded bg-mtg-panel border border-mtg-border' }, [
+            el('div', { className: 'text-xs text-mtg-dim truncate' }, [name]),
+            el('div', { className: 'text-lg font-bold text-white' }, [String(data.ct[key])])
+          ]));
+        }
+      });
+      container.appendChild(saGrid);
+    }
+  }
+
+  // Flags
+  if (data.fl && data.fl.length > 0) {
+    container.appendChild(el('h3', { className: 'font-cinzel text-lg text-white mb-2' }, ['Diagnostic Flags']));
+    const flagBox = el('div', { className: 'space-y-1 mb-6' });
+    data.fl.forEach(f => {
+      flagBox.appendChild(el('div', { className: 'flex items-center gap-2 text-sm text-yellow-400' }, [
+        el('span', {}, ['\u26A0']),
+        el('span', {}, [f])
+      ]));
+    });
+    container.appendChild(flagBox);
+  }
+
+  // CTA
+  const cta = el('div', { className: 'mt-8 text-center' });
+  cta.appendChild(el('a', {
+    href: window.location.pathname,
+    className: 'inline-block px-8 py-3 rounded-lg bg-mtg-gold text-mtg-dark font-semibold hover:bg-mtg-accent transition text-sm'
+  }, ['Run Your Own Audit']));
+  container.appendChild(cta);
+
+  app.appendChild(container);
+}
+
+// ============================================================
+// AUTO-SAVE — persist STATE to localStorage on every change
+// ============================================================
+const SAVE_KEY = 'manabot-insights-state';
+
+function saveState() {
+  try {
+    // Save everything except scryfallData (too large, re-fetched on import)
+    const toSave = {
+      step: STATE.step,
+      rawText: STATE.rawText,
+      commanderInput: STATE.commanderInput,
+      parsedCards: STATE.parsedCards,
+      fetchErrors: STATE.fetchErrors,
+      characterSheet: STATE.characterSheet,
+      categories: STATE.categories,
+      fingers: STATE.fingers,
+      feedback: STATE.feedback,
+      userEdited: STATE.userEdited,
+      fingerEdited: STATE.fingerEdited,
+      // Store card names so we can re-fetch scryfall data
+      _hasScryfallData: Object.keys(STATE.scryfallData).length > 0,
+      _savedAt: Date.now()
+    };
+    localStorage.setItem(SAVE_KEY, JSON.stringify(toSave));
+  } catch (e) { /* storage full or unavailable — silently ignore */ }
+}
+
+function loadState() {
+  try {
+    const saved = localStorage.getItem(SAVE_KEY);
+    if (!saved) return false;
+    const data = JSON.parse(saved);
+    // Only restore if saved within last 7 days
+    if (data._savedAt && (Date.now() - data._savedAt) > 7 * 24 * 60 * 60 * 1000) {
+      localStorage.removeItem(SAVE_KEY);
+      return false;
+    }
+    Object.keys(data).forEach(k => {
+      if (!k.startsWith('_') && STATE.hasOwnProperty(k)) STATE[k] = data[k];
+    });
+    return data._hasScryfallData || false;
+  } catch (e) { return false; }
+}
+
+function clearSavedState() {
+  localStorage.removeItem(SAVE_KEY);
+}
+
+// Patch render() to auto-save after every re-render
+const _baseRender = render;
+render = function() {
+  _baseRender();
+  saveState();
+};
+
+// ============================================================
+// INIT — restore saved state if available
+// ============================================================
+// Check for shared view first
+const shareData = loadShareData();
+if (shareData) {
+  renderSharedView(shareData);
+} else {
+
+const needsRefetch = loadState();
+if (needsRefetch && STATE.parsedCards.length > 0 && Object.keys(STATE.scryfallData).length === 0) {
+  // We have saved card data but no scryfall — show restoring banner, re-fetch
+  const app = $('#app');
+  app.innerHTML = '<div class="max-w-3xl mx-auto text-center py-16"><div class="text-mtg-gold font-cinzel text-xl mb-3">Restoring your session...</div><div class="text-mtg-dim text-sm">Re-fetching card data from Scryfall</div></div>';
+  (async () => {
+    const { data, errors } = await fetchFromScryfall(STATE.parsedCards);
+    STATE.scryfallData = data;
+    STATE.fetchErrors = errors;
+    render();
+  })();
+} else {
+  render();
+}
+
+// Also save on beforeunload as a safety net
+window.addEventListener('beforeunload', saveState);
+
+} // end else (not shared view)
 </script>
 </body>
 </html>
