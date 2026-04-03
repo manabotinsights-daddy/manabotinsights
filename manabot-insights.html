@@ -1300,7 +1300,786 @@ function getCardOracleAndType(cardName) {
 }
 
 // ============================================================
-// SA SUGGESTION ENGINE
+// COMMANDER SIGNAL DETECTION — compositional system
+// ============================================================
+// ============================================================
+// COMMANDER SIGNAL DETECTION — compositional system that reads
+// the commander oracle text, detects mechanical needs, and
+// builds strategic SA role suggestions from the combination
+// of signals found. Works for ANY commander, not just
+// pre-defined archetypes.
+// ============================================================
+
+// Each signal represents a mechanical verb the commander uses.
+// When detected, it contributes role candidates to the suggestion pool.
+// Roles are scored by (weight × matching card count) and the top 5 win.
+const CMD_SIGNALS = {
+  // ── SACRIFICE ENGINE — commander consumes creatures ──
+  sacrifice: {
+    detect: o => { const noWard = o.replace(/ward[—\-–:]\s*sacrifice[^\n]*/gi, ''); return /casualty|exploit|devour|emerge|sacrifice.*creature|as an additional cost.*sacrifice|sacrifice a creature|sacrifice another/i.test(noWard); },
+    roles: [
+      { name: 'Fodder Factory',
+        desc: 'Expendable bodies — tokens, cheap creatures, flashback producers — that feed the sacrifice engine',
+        weight: 3,
+        test: (o, t, sd) =>
+          /create.*(?:creature )?token/i.test(o) || /flashback|afterlife|decayed|embalm|eternalize/i.test(o) ||
+          (/creature/i.test(t) && sd?.cmc <= 2 && !/whenever.*(?:dies|enters)|each opponent|loses? \d+ life/i.test(o))
+      },
+      { name: 'Recursive Fodder',
+        desc: 'Self-returning creatures — undying, persist, graveyard recursion — for repeated sacrifice',
+        weight: 2,
+        test: (o, t, sd) =>
+          /undying|persist|unearth|encore/i.test(o) ||
+          (/return.*(?:this card|it|itself).*(?:from|to).*(?:graveyard|battlefield|hand)/i.test(o) && /creature/i.test(t)) ||
+          /return.*from.*graveyard to (?:the battlefield|your hand)/i.test(o) ||
+          /reassembl/i.test(o) ||
+          (/whenever.*land.*enters/i.test(o) && /return.*graveyard/i.test(o)) ||
+          /when .* dies.*return/i.test(o)
+      },
+      { name: 'Death Dividend',
+        desc: 'Aristocrats payoffs — Blood Artist effects that convert each sacrifice into drain, cards, or treasures. Protected class: never sacrifice these.',
+        weight: 2,
+        test: (o, t, sd) =>
+          (/whenever.*(?:a |another )?(?:creature|nontoken|token).*dies/i.test(o) &&
+           /lose.*life|deals?.*damage|gain.*life|draw|create.*(?:token|treasure)|add \{/i.test(o)) ||
+          /double.*(?:trigger|death|die)|if.*would.*trigger.*additional/i.test(o)
+      }
+    ]
+  },
+
+  // ── SPELL COPYING — commander copies or rewards doubling spells ──
+  spellCopy: {
+    detect: o => /casualty|copy.*(?:the |that )?spell|copies of.*spell|whenever.*copy/i.test(o),
+    roles: [
+      { name: 'Spells Worth Copying',
+        desc: 'High-impact instants/sorceries where doubling provides disproportionate value — flashback spells get casualty on both casts',
+        weight: 2,
+        test: (o, t, sd) =>
+          /instant|sorcery/i.test(t) && (
+            sd?.cmc >= 3 || /draw.*card/i.test(o) || /destroy|exile.*target/i.test(o) ||
+            /each opponent.*loses/i.test(o) || /flashback/i.test(o) || /sacrifice.*draw/i.test(o) ||
+            /return.*from.*graveyard/i.test(o)
+          )
+      }
+    ]
+  },
+
+  // ── SPELLCAST TRIGGER — commander triggers on casting spells ──
+  spellcastTrigger: {
+    detect: o => (/whenever you cast.*(?:instant|sorcery|noncreature)/i.test(o) || /whenever you cast (?:a|an) (?:\w+ )?spell/i.test(o) || /magecraft|(?:^|\s)storm(?:\s|$)/i.test(o)) && !/whenever you cast an enchantment/i.test(o),
+    roles: [
+      { name: 'Card Velocity',
+        desc: 'Cantrips, wheels, and draw to keep the spell chain going — the engine refunds value but needs fuel',
+        weight: 3,
+        test: (o, t, sd) =>
+          (/instant|sorcery/i.test(t) && sd?.cmc <= 2 && /draw/i.test(o)) ||
+          /wheel|each player.*(?:discards.*hand|draws)/i.test(o) ||
+          (/instant|sorcery/i.test(t) && /draw.*card/i.test(o) && sd?.cmc <= 3)
+      },
+      { name: 'Spell Payoffs',
+        desc: 'Damage and value triggers from casting — pingers, storm effects, magecraft bodies',
+        weight: 2,
+        test: (o, t, sd) =>
+          (/whenever you cast.*(?:instant|sorcery|noncreature)|magecraft|prowess/i.test(o) &&
+           /deal.*damage|lose.*life|create.*token|draw|\+1\/\+1/i.test(o)) ||
+          /storm/i.test(o)
+      },
+      { name: 'Cost Reducers',
+        desc: 'Make spells cheaper to chain more casts per turn — the turbo button',
+        weight: 1,
+        test: (o, t, sd) =>
+          /(?:instant|sorcery|noncreature).*cost.*less|spells? you cast cost.*\{?\d\}? less/i.test(o) ||
+          /convoke|affinity|delve|improvise/i.test(o)
+      }
+    ]
+  },
+
+  // ── MANA GENERATION — commander produces mana when triggered ──
+  manaGen: {
+    detect: o => /add \{.*\}.*(?:whenever|for each|this turn)|whenever.*(?:cast|attacks?).*add \{|add.*mana.*for each/i.test(o),
+    roles: [
+      { name: 'Mana Acceleration',
+        desc: 'Rituals and fast mana for explosive turns — the commander refunds mana, but you need the initial spark',
+        weight: 2,
+        test: (o, t, sd) =>
+          (/instant|sorcery/i.test(t) && /add \{.*\}\{.*\}|add.*mana|treasure token/i.test(o)) ||
+          /ritual|desperate|pyretic|seething|dark ritual/i.test(o)
+      }
+    ]
+  },
+
+  // ── COST REDUCTION — commander makes spells cheaper ──
+  costReduction: {
+    detect: o => /cost.*\{?\d+\}? less|costs? .*less to cast|without paying its mana cost/i.test(o),
+    roles: [
+      { name: 'Payload Spells',
+        desc: 'Expensive or X-cost spells made efficient by cost reduction — the payoff for the discount',
+        weight: 3,
+        test: (o, t, sd) => sd?.cmc >= 5 || /\{x\}/i.test(o)
+      }
+    ]
+  },
+
+  // ── FIGHT TRIGGER — commander fights when something happens ──
+  fightTrigger: {
+    detect: o => /fights?.*(?:target|up to|another)|(?:target|each).*fights?/i.test(o),
+    roles: [
+      { name: 'Fight Sustainment',
+        desc: 'Indestructible, deathtouch, and regeneration so the fighter survives chained fights',
+        weight: 3,
+        test: (o, t, sd) =>
+          /indestructible|deathtouch|regenerate|totem armor|prevent all.*damage/i.test(o) ||
+          (/equipment/i.test(t) && /indestructible|deathtouch/i.test(o))
+      }
+    ]
+  },
+
+  // ── TARGET OWN — commander triggers when you target your own creatures ──
+  targetOwn: {
+    detect: o => /whenever.*(?:creature|permanent).*(?:you control )?becomes? the target|heroic/i.test(o),
+    roles: [
+      { name: 'Targeting Arsenal',
+        desc: 'Cheap spells that target your own creatures to trigger the commander — the ammunition',
+        weight: 3,
+        test: (o, t, sd) =>
+          (/instant|sorcery/i.test(t) && sd?.cmc <= 2 && /target.*creature|creature.*gets|give.*target/i.test(o)) ||
+          (/aura/i.test(t) && sd?.cmc <= 2)
+      }
+    ]
+  },
+
+  // ── VEHICLE SYNERGY — commander works with vehicles ──
+  vehicleSynergy: {
+    detect: o => /vehicle|whenever.*vehicle|crew/i.test(o),
+    roles: [
+      { name: 'Crew Fleet',
+        desc: 'Evasion and utility creatures that reliably crew vehicles — prioritize creatures with ETB or tap value',
+        weight: 3,
+        test: (o, t, sd) => /creature/i.test(t) && !(/vehicle/i.test(t)) && sd?.power >= 1
+      },
+      { name: 'Vehicle Armada',
+        desc: 'Additional vehicles ensuring the engine survives targeted removal and provides multiple triggers per combat',
+        weight: 2,
+        test: (o, t, sd) => /vehicle/i.test(t) || (/artifact/i.test(t) && /crew/i.test(o))
+      }
+    ]
+  },
+
+  // ── EXILE & PLAY — commander exiles cards and lets you cast/play them ──
+  exilePlay: {
+    detect: o => /exile.*(?:cards?|top).*(?:you may (?:play|cast)|play.*from.*exile|cast.*from.*exile)/i.test(o),
+    roles: [
+      { name: 'Exile Value',
+        desc: 'Cards that support casting from exile — fixing mana for stolen spells, exile synergies',
+        weight: 1,
+        test: (o, t, sd) => /cast.*from exile|play.*from exile|exile.*you may|mana of any/i.test(o)
+      }
+    ]
+  },
+
+  // ── COMBAT DAMAGE TRIGGER — commander rewards dealing combat damage ──
+  combatDamage: {
+    detect: o => /deals? combat damage to (?:a player|an opponent|each)/i.test(o),
+    roles: [
+      { name: 'Evasion Suite',
+        desc: 'Unblockable, flying, menace — ensure combat damage connects every turn',
+        weight: 2,
+        test: (o, t, sd) => /can't be blocked|unblockable|menace|shadow|fear|intimidate/i.test(o) || (/flying|trample/i.test(o) && !/creature/i.test(t))
+      },
+      { name: 'Extra Combats',
+        desc: 'Additional combat phases or extra turns to multiply damage triggers',
+        weight: 1,
+        test: (o, t, sd) => /additional combat|extra combat|extra turn|untap.*(?:all|each).*(?:attacking|creature)/i.test(o)
+      }
+    ]
+  },
+
+  // ── TOKEN CREATION — commander creates tokens or cares about tokens ──
+  tokenCreation: {
+    detect: o => (/create.*(?:creature )?token|whenever.*token.*enters|token.*creature/i.test(o) && /whenever|each|attack/i.test(o)) || /amass/i.test(o),
+    roles: [
+      { name: 'Token Doublers',
+        desc: 'Doubling Season, Anointed Procession — exponential token scaling',
+        weight: 2,
+        test: (o, t, sd) => /double.*token|additional.*token|if.*would create.*token.*create|twice that many/i.test(o)
+      },
+      { name: 'Anthems & Lords',
+        desc: 'Permanent buffs that make the whole token army lethal',
+        weight: 2,
+        test: (o, t, sd) => /creatures you control get \+|all.*creatures.*get \+|other.*creatures.*get \+/i.test(o)
+      }
+    ]
+  },
+
+  // ── ETB TRIGGER — commander triggers on entering the battlefield ──
+  etbTrigger: {
+    detect: o => { const noPartner = o.replace(/partner with[^\n]*/gi, ''); return /when .* enters(?: the battlefield)?,/i.test(noPartner) && /draw|create|destroy|exile|discard|return|search|deal|lose|gain|mill|counter|put/i.test(noPartner); },
+    roles: [
+      { name: 'Blink & Clone',
+        desc: 'Retrigger the ETB — flicker effects, clone copies, Panharmonicon',
+        weight: 3,
+        test: (o, t, sd) =>
+          /exile.*return.*to the battlefield|flicker/i.test(o) ||
+          /copy of|becomes? a copy|clone/i.test(o) ||
+          /enters.*twice|if.*entering.*would cause.*additional/i.test(o) ||
+          /panharmonicon/i.test(o)
+      }
+    ]
+  },
+
+  // ── DISCARD SYNERGY — commander benefits from discarding cards ──
+  discardSynergy: {
+    detect: o => /discard.*(?:card|creature)|madness|whenever you discard|whenever.*player discards/i.test(o),
+    roles: [
+      { name: 'Discard Fodder',
+        desc: 'Cards that want to be discarded — madness, flashback, graveyard value on discard',
+        weight: 2,
+        test: (o, t, sd) =>
+          /madness|flashback|aftermath|jump-start|retrace/i.test(o) ||
+          /when.*(?:put into|leaves).*graveyard from.*hand/i.test(o) ||
+          /dredge/i.test(o)
+      }
+    ]
+  },
+
+  // ── KEYWORD GRANTING — commander gains/grants keywords ──
+  keywordGrant: {
+    detect: o => /keyword.*abilit|gets? all.*(?:keyword|abilit)|has all.*abilit/i.test(o),
+    roles: [
+      { name: 'Keyword Donors',
+        desc: 'Creatures with premium keywords — flying, deathtouch, hexproof, lifelink, trample, double strike',
+        weight: 3,
+        test: (o, t, sd) => {
+          const kws = sd?.keywords || [];
+          const valuable = ['Flying', 'Deathtouch', 'Lifelink', 'Trample', 'Hexproof', 'Double Strike', 'Vigilance', 'Menace', 'First Strike', 'Indestructible', 'Haste'];
+          return /creature/i.test(t) && kws.filter(k => valuable.includes(k)).length >= 1;
+        }
+      }
+    ]
+  },
+
+  // ── GRAVEYARD MATTERS — commander cares about cards in graveyard ──
+  graveyardMatters: {
+    detect: o => /cards? in your graveyard|from your graveyard|threshold|delirium|(?:return|cast|play).*from.*(?:your )?graveyard/i.test(o),
+    roles: [
+      { name: 'Graveyard Stockpile',
+        desc: 'Self-mill, loot, and discard to stock the graveyard with fuel',
+        weight: 2,
+        test: (o, t, sd) => /mill \d|surveil|dredge|discard.*card|put.*(?:cards?|top).*into.*graveyard/i.test(o)
+      },
+      { name: 'Graveyard Recursion',
+        desc: 'Reanimate, regrow, and replay cards from the graveyard for repeated value',
+        weight: 2,
+        test: (o, t, sd) => /return.*from.*graveyard.*to.*(?:battlefield|hand)|reanimate|unearth|encore|regrowth/i.test(o)
+      }
+    ]
+  },
+
+  // ── +1/+1 COUNTERS — commander uses counters ──
+  countersSynergy: {
+    detect: o => /proliferate/i.test(o) || (/\+1\/\+1 counter/i.test(o) && /whenever|each|double|put|distribute|enters.*with/i.test(o)),
+    roles: [
+      { name: 'Counter Amplification',
+        desc: 'Doubling Season, Hardened Scales, proliferate — exponential counter scaling',
+        weight: 3,
+        test: (o, t, sd) => /proliferate|double.*counter|if.*would.*(?:place|put).*counter.*(?:place|put).*additional|hardened scales|scales/i.test(o)
+      },
+      { name: 'Counter Sources',
+        desc: 'Cards that distribute +1/+1 counters across the board',
+        weight: 2,
+        test: (o, t, sd) => /put.*\+1\/\+1 counter|enters.*with.*\+1\/\+1|distribute.*counter|\+1\/\+1 counter on each/i.test(o)
+      }
+    ]
+  },
+
+  // ── LANDFALL — commander triggers on lands entering ──
+  landfallTrigger: {
+    detect: o => /landfall|whenever a land enters the battlefield under your control/i.test(o),
+    roles: [
+      { name: 'Landfall Payoffs',
+        desc: 'Additional landfall triggers that stack with the commander',
+        weight: 2,
+        test: (o, t, sd) => /landfall|whenever a land enters/i.test(o)
+      },
+      { name: 'Extra Land Drops',
+        desc: 'Play additional lands to multiply triggers per turn',
+        weight: 2,
+        test: (o, t, sd) => /play.*additional land|you may play.*land|explore/i.test(o)
+      },
+      { name: 'Land Recursion',
+        desc: 'Return lands from graveyard to replay fetchlands for more triggers',
+        weight: 1,
+        test: (o, t, sd) => /return.*land.*from.*graveyard|play lands? from your graveyard|crucible/i.test(o)
+      }
+    ]
+  },
+
+  // ── ENCHANTRESS — commander triggers on enchantments ──
+  enchantressTrigger: {
+    detect: o => /whenever.*(?:you cast|an ).*enchantment|constellation/i.test(o),
+    roles: [
+      { name: 'Enchantress Draw',
+        desc: 'Draw engines that trigger from casting/controlling enchantments',
+        weight: 3,
+        test: (o, t, sd) => /whenever.*enchantment.*(?:enters|cast).*draw|constellation.*draw|enchantress/i.test(o)
+      },
+      { name: 'Enchantment Mass',
+        desc: 'High enchantment density to maximize triggers per turn',
+        weight: 2,
+        test: (o, t, sd) => /enchantment/i.test(t) && !/aura/i.test(t)
+      }
+    ]
+  },
+
+  // ── LIFEGAIN PAYOFF — commander rewards life gain ──
+  lifegainPayoff: {
+    detect: o => /whenever you gain life/i.test(o) || (/gain.*life/i.test(o) && /create|draw|deal|counter|\+1|\+X/i.test(o)),
+    roles: [
+      { name: 'Lifegain Triggers',
+        desc: 'Repeatable sources of life gain to feed the commander — lifelink, Soul Warden, extort',
+        weight: 3,
+        test: (o, t, sd) => /lifelink|you gain.*life|whenever.*deal.*damage.*gain|extort|soul.*warden/i.test(o)
+      },
+      { name: 'Lifegain Payoffs',
+        desc: 'Scaling rewards for life gain — Well of Lost Dreams, Aetherflux Reservoir',
+        weight: 2,
+        test: (o, t, sd) => /whenever you gain life|for each life you gained|life you.*gained this turn/i.test(o)
+      }
+    ]
+  },
+
+  // ── DAMAGE AMPLIFICATION — commander amplifies or triggers on damage ──
+  damageAmp: {
+    detect: o => /deals? that much.*plus|double.*damage|additional.*damage|damage.*instead|if a.*source.*would deal/i.test(o),
+    roles: [
+      { name: 'Damage Amplifiers',
+        desc: 'Damage doublers and replacement effects that scale with the commander',
+        weight: 2,
+        test: (o, t, sd) => /double.*damage|deals?.*additional.*damage|if.*would deal damage.*deals.*plus|each opponent.*loses.*life.*equal/i.test(o)
+      },
+      { name: 'Damage Pingers',
+        desc: 'Repeatable damage sources that get amplified — the scaling base for the multipliers',
+        weight: 2,
+        test: (o, t, sd) => /deals? \d+ damage to each opponent|deals? \d+ damage to any target|whenever.*deals? \d+ damage/i.test(o)
+      }
+    ]
+  },
+
+  // ── TRIBAL — commander cares about creature types ──
+  tribalSynergy: {
+    detect: (o, kw, t) => /all .*(creatures you control|elves|goblins|zombies|vampires|merfolk|warriors|wizards|knights|humans|dragons|hydras|dinosaurs|soldiers|spirits|angels|demons|beasts|ninjas?|rogues?|clerics?|shamans?|orcs?|armou?r?ies?) get|other .* get \+|choose a creature type|whenever (?:a|an) (?:ninja|elf|goblin|zombie|vampire|merfolk|warrior|wizard|knight|human|dragon|hydra|dinosaur|soldier|spirit|angel|demon|beast|rogue|cleric|shaman|pirate|cat|dog|rat|sliver|ally|elemental|faerie|bird|orc|army|rabbit|raccoon).*(?:you control|deals|enters|dies|attacks)/i.test(o),
+    roles: [
+      { name: 'Tribal Lords',
+        desc: 'Type-specific lords and anthems for the tribe',
+        weight: 2,
+        test: (o, t, sd) => /other.*get \+\d+\/\+\d+|creatures you control get \+|choose a creature type.*get/i.test(o)
+      },
+      { name: 'Tribal Payoffs',
+        desc: 'Effects that scale with creature count or type density',
+        weight: 2,
+        test: (o, t, sd) => /for each.*you control|creatures? of the chosen type|all .* you control/i.test(o)
+      }
+    ]
+  },
+
+  // ── EXTRA TURNS — commander benefits from extra turns ──
+  extraTurns: {
+    detect: o => /extra turn|additional.*(?:combat|untap)/i.test(o) || /untap.*(?:all|each).*(?:permanent|creature|artifact).*you control/i.test(o),
+    roles: [
+      { name: 'Temporal Assault',
+        desc: 'Extra turn spells and untap effects to multiply the commander\'s impact per game cycle',
+        weight: 2,
+        test: (o, t, sd) => /extra turn|take an additional turn|additional combat phase|untap all.*you control/i.test(o)
+      }
+    ]
+  },
+
+  // ── REANIMATE — commander brings things back from graveyard ──
+  reanimateTrigger: {
+    detect: o => /return.*creature.*from.*graveyard.*to the battlefield|reanimate|whenever.*creature.*(?:put into|dies).*(?:return|exile.*return)/i.test(o),
+    roles: [
+      { name: 'Reanimation Targets',
+        desc: 'High-value creatures with ETB effects worth cheating into play repeatedly',
+        weight: 3,
+        test: (o, t, sd) => /creature/i.test(t) && sd?.cmc >= 5 && /when.*enters|destroy|exile|draw|each opponent|creates?.*token/i.test(o)
+      },
+      { name: 'Self-Mill',
+        desc: 'Fill the graveyard with reanimation targets — the stockpile',
+        weight: 2,
+        test: (o, t, sd) => /mill|surveil|dredge|put.*top.*into.*graveyard|entomb/i.test(o)
+      }
+    ]
+  },
+
+  // ── TOPDECK MANIPULATION — commander cares about the top of library ──
+  topdeckMatters: {
+    detect: o => /reveal the top card|top card of your library|(?:mana value|converted mana cost).*(?:of|equal)|look at the top|top of your library/i.test(o) && /lose.*life|damage|draw|put.*into.*hand|cast/i.test(o),
+    roles: [
+      { name: 'Topdeck Manipulation',
+        desc: 'Scroll Rack, Sensei\'s Top, Brainstorm — control what\'s on top to maximize triggers',
+        weight: 3,
+        test: (o, t, sd) => /scry|look at the top|put.*on top of your library|top of.*library/i.test(o) || /scroll rack|sensei|brainstorm|mystical tutor/i.test(o)
+      },
+      { name: 'High-MV Payloads',
+        desc: 'Expensive spells that maximize damage from topdeck reveals — Draco, Temporal Trespass, Treasure Cruise with delve',
+        weight: 2,
+        test: (o, t, sd) => sd?.cmc >= 6 || /delve|affinity|convoke/i.test(o)
+      }
+    ]
+  },
+
+  // ── NINJUTSU — commander uses ninjutsu or cares about ninja combat ──
+  ninjutsuSynergy: {
+    detect: o => /ninjutsu|return.*unblocked attacker/i.test(o),
+    roles: [
+      { name: 'Evasive Enablers',
+        desc: 'Cheap unblockable or flying creatures that attack, then get bounced for ninjutsu — Changeling Outcast, Ornithopter',
+        weight: 3,
+        test: (o, t, sd) => /creature/i.test(t) && sd?.cmc <= 2 && /can't be blocked|flying|shadow|skulk|menace/i.test(o)
+      }
+    ]
+  },
+
+  // ── TOKEN CONSUMPTION — commander taps/sacrifices tokens as a resource ──
+  tokenConsumption: {
+    detect: o => /tap.*untapped.*token|tap.*token.*you control/i.test(o),
+    roles: [
+      { name: 'Token Generation',
+        desc: 'Cards that reliably produce tokens to fuel the commander\'s activated abilities — the engine needs bodies',
+        weight: 3,
+        test: (o, t, sd) =>
+          /create.*(?:creature )?token/i.test(o) || /afterlife|decayed|embalm|eternalize|fabricate|amass/i.test(o) ||
+          /treasure token|food token|clue token|blood token/i.test(o) ||
+          (/creature/i.test(t) && /token/i.test(o))
+      },
+      { name: 'Token Multiplication',
+        desc: 'Doubling Season, Parallel Lives, Anointed Procession — exponential scaling for token-hungry commanders',
+        weight: 2,
+        test: (o, t, sd) =>
+          /double.*token|additional.*token|if.*would create.*token.*create|twice that many/i.test(o) ||
+          /parallel lives|doubling season|anointed procession/i.test(o)
+      },
+      { name: 'Untap Synergy',
+        desc: 'Effects that untap permanents to reuse token-tapping abilities — Seedborn Muse, Intruder Alarm',
+        weight: 2,
+        test: (o, t, sd) =>
+          /untap.*(?:all|each).*(?:creature|permanent|token)/i.test(o) ||
+          /whenever.*creature.*enters.*untap/i.test(o) ||
+          /vigilance/i.test(o)
+      }
+    ]
+  },
+
+  // ── ETB DOUBLING — commander doubles enter-the-battlefield triggers ──
+  etbDoubling: {
+    detect: o => /triggers? an additional time|enters.*triggers?.*twice|if.*entering.*(?:cause|would).*additional|panharmonicon/i.test(o),
+    roles: [
+      { name: 'ETB Value Creatures',
+        desc: 'Creatures with powerful enter-the-battlefield effects — Mulldrifter, Ravenous Chupacabra, Sun Titan — doubled by the commander',
+        weight: 3,
+        test: (o, t, sd) =>
+          /creature/i.test(t) && /when .* enters/i.test(o) &&
+          /draw|destroy|exile|create.*token|search|return|deal.*damage|gain.*life|mill|put.*counter/i.test(o)
+      },
+      { name: 'Blink & Flicker',
+        desc: 'Retrigger ETBs by exiling and returning permanents — each blink fires the doubled trigger again',
+        weight: 2,
+        test: (o, t, sd) =>
+          /exile.*return.*(?:to the battlefield|under)|flicker/i.test(o) ||
+          /copy of|becomes? a copy|clone/i.test(o)
+      },
+      { name: 'ETB Token Makers',
+        desc: 'Permanents that create tokens on entry — doubled by the commander for exponential board presence',
+        weight: 2,
+        test: (o, t, sd) =>
+          /when .* enters.*create.*token|enters the battlefield.*create/i.test(o)
+      }
+    ]
+  },
+
+  // ── PERMANENT ANIMATION — commander turns non-creatures into creatures ──
+  permanentAnimation: {
+    detect: o => /(?:artifact|enchantment|land|noncreature|permanent).*(?:is a|becomes? a|are).*(?:\d+\/\d+|creature)|animate.*(?:artifact|land|enchantment)/i.test(o),
+    roles: [
+      { name: 'High-MV Permanents',
+        desc: 'Expensive non-creature artifacts and enchantments that become threatening animated beaters — the army in disguise',
+        weight: 3,
+        test: (o, t, sd) =>
+          ((/artifact/i.test(t) && !/equipment/i.test(t)) || (/enchantment/i.test(t) && !/aura/i.test(t))) &&
+          sd?.cmc >= 4
+      },
+      { name: 'Permanent Ramp',
+        desc: 'Fast mana and cost reduction to deploy expensive artifacts and enchantments quickly — accelerate the army buildup',
+        weight: 2,
+        test: (o, t, sd) =>
+          /add \{.*\}|treasure|mana rock/i.test(o) ||
+          (/artifact/i.test(t) && sd?.cmc <= 2 && /add/i.test(o)) ||
+          /cost.*less|costs? .*less/i.test(o)
+      },
+      { name: 'Permanent Recovery',
+        desc: 'Return destroyed artifacts and enchantments from graveyard — rebuild the animated army after boardwipes',
+        weight: 2,
+        test: (o, t, sd) =>
+          /return.*(?:artifact|enchantment|permanent).*from.*graveyard/i.test(o) ||
+          /open the vaults|replenish|dance of the manse/i.test(o)
+      }
+    ]
+  },
+
+  // ── ABILITY COPYING — commander copies activated or triggered abilities ──
+  abilityCopy: {
+    detect: o => /copy.*(?:activated|triggered).*ability|copies of.*abilit/i.test(o),
+    roles: [
+      { name: 'Powerful Activations',
+        desc: 'Permanents with high-impact activated abilities worth copying — planeswalkers, artifacts with big taps',
+        weight: 3,
+        test: (o, t, sd) =>
+          /\{t\}.*(?:draw|destroy|exile|create|deal|return|search|add \{)/i.test(o) ||
+          (/planeswalker/i.test(t)) ||
+          (/artifact|creature/i.test(t) && /\{.*\}.*:/i.test(o) && /draw|destroy|exile|create|deal/i.test(o))
+      },
+      { name: 'ETB Doublers',
+        desc: 'Triggered abilities on enter-the-battlefield worth copying — Panharmonicon, Strionic Resonator effects',
+        weight: 2,
+        test: (o, t, sd) =>
+          /when .* enters/i.test(o) && /draw|create|destroy|exile|search|return|deal/i.test(o)
+      }
+    ]
+  },
+
+  // ── LIBRARY CHEAT — commander puts creatures from library onto battlefield ──
+  libraryCheat: {
+    detect: o => /look at the top.*(?:put|place).*onto the battlefield|from.*(?:your )?library.*onto the battlefield|put a creature.*from among.*onto the battlefield|card of your library.*onto the battlefield|(?:bottom|top) card.*library.*put it onto/i.test(o),
+    roles: [
+      { name: 'High-Impact Creatures',
+        desc: 'Expensive creatures with powerful ETB or attack triggers — cheated into play for free',
+        weight: 3,
+        test: (o, t, sd) =>
+          /creature/i.test(t) && sd?.cmc >= 4 &&
+          /when .* enters|whenever .* attacks|deals? combat damage/i.test(o)
+      },
+      { name: 'Library Manipulation',
+        desc: 'Scry, top-of-library tutors, and deck stacking to control what gets cheated in',
+        weight: 2,
+        test: (o, t, sd) =>
+          /scry|look at the top|put.*on top of your library|search.*library.*put.*on top/i.test(o)
+      },
+      { name: 'Evasive Attackers',
+        desc: 'Creatures that reliably connect in combat to trigger the attack condition',
+        weight: 2,
+        test: (o, t, sd) =>
+          /creature/i.test(t) && /can't be blocked|flying|menace|trample|shadow|skulk/i.test(o)
+      }
+    ]
+  },
+
+  // ── UPKEEP MATTERS — commander cares about upkeep steps or triggers ──
+  upkeepMatters: {
+    detect: o => /additional upkeep|extra upkeep|upkeep step/i.test(o),
+    roles: [
+      { name: 'Upkeep Payoffs',
+        desc: 'Permanents with "at the beginning of your upkeep" triggers — each extra upkeep multiplies their value',
+        weight: 3,
+        test: (o, t, sd) =>
+          /at the beginning of (?:your |each )upkeep/i.test(o) &&
+          /draw|create|deal|lose|gain|put|counter|destroy|exile|return|mill|discard/i.test(o)
+      },
+      { name: 'Cumulative Value',
+        desc: 'Age counters, cumulative upkeep with payoffs, and permanents that scale with repeated upkeep triggers',
+        weight: 2,
+        test: (o, t, sd) =>
+          /cumulative upkeep|age counter|vanishing|fading|suspend/i.test(o) ||
+          (/at the beginning of (?:your )?upkeep/i.test(o) && /counter|token|draw/i.test(o))
+      }
+    ]
+  },
+
+  // ── POWER MATTERS — commander uses power for mechanics beyond combat ──
+  powerMatters: {
+    detect: o => /power rather than.*toughness|(?:equal to|less than or equal to).*(?:its|their|this creature's|target creature's) power|power (?:determines?|is used)|assigned.*using.*power/i.test(o),
+    roles: [
+      { name: 'High-Power Creatures',
+        desc: 'Creatures with power greater than toughness — functionally unkillable under the commander\'s damage rules',
+        weight: 3,
+        test: (o, t, sd) =>
+          /creature/i.test(t) && sd?.power > sd?.toughness
+      },
+      { name: 'Power Boosters',
+        desc: 'Equipment, auras, and effects that increase power — scales both offense and defensive threshold',
+        weight: 2,
+        test: (o, t, sd) =>
+          /gets? \+\d+\/\+0|\+\d+\/\+0/i.test(o) ||
+          (/equipment|aura/i.test(t) && /\+\d+/i.test(o)) ||
+          /double.*power|power becomes/i.test(o)
+      },
+      { name: 'Fight & Bite',
+        desc: 'Fight and damage-based removal that uses your creatures\' high power as removal — Prey Upon, Ram Through',
+        weight: 2,
+        test: (o, t, sd) =>
+          /fights?.*target|target.*fights?|deals? damage equal to.*power|(?:bite|ram|rabid)/i.test(o)
+      }
+    ]
+  },
+
+  // ── PLANESWALKER SYNERGY — commander cares about planeswalkers ──
+  planeswalkerSynergy: {
+    detect: o => /planeswalker.*(?:you control|loyalty|die|enters|cost)|loyalty.*(?:abilit|counter|additional|\+1)/i.test(o),
+    roles: [
+      { name: 'Planeswalker Army',
+        desc: 'High-impact planeswalkers that benefit from loyalty acceleration and protection',
+        weight: 3,
+        test: (o, t, sd) => /planeswalker/i.test(t)
+      },
+      { name: 'Proliferate & Loyalty',
+        desc: 'Proliferate effects and Oath-of cards that add loyalty counters across all your walkers',
+        weight: 2,
+        test: (o, t, sd) =>
+          /proliferate/i.test(o) ||
+          /loyalty counter|additional loyalty/i.test(o) ||
+          /oath of/i.test(o)
+      },
+      { name: 'Walker Protection',
+        desc: 'Creatures and effects that redirect attacks away from planeswalkers — blockers, pillowfort',
+        weight: 2,
+        test: (o, t, sd) =>
+          /can't (?:be )?attack/i.test(o) ||
+          (/creature/i.test(t) && /defender|reach|vigilance|deathtouch/i.test(o) && sd?.cmc <= 3) ||
+          /propaganda|ghostly prison|sphere of safety/i.test(o)
+      }
+    ]
+  },
+
+  // ── EXILE MATTERS — commander cares about cards being in exile or entering exile ──
+  exileMatters: {
+    detect: o => /cards? in exile|cards?.*(?:put into|are in) exile|(?:seven|five|ten|three).*(?:or more )?cards? in exile|exile.*(?:from|graveyards?|battlefield).*(?:draw|lose|gain|create|deal|counter)/i.test(o),
+    roles: [
+      { name: 'Exile Enablers',
+        desc: 'Cards that exile from graveyards and battlefields to fuel the commander\'s threshold — Tormod\'s Crypt, Swords to Plowshares',
+        weight: 3,
+        test: (o, t, sd) =>
+          /exile.*(?:target|all|each).*(?:from|card|creature|graveyard|permanent)/i.test(o) ||
+          /exile target|exile all/i.test(o) ||
+          /exile.*graveyard/i.test(o) ||
+          (/instant|sorcery/i.test(t) && /exile/i.test(o))
+      },
+      { name: 'Exile Payoffs',
+        desc: 'Cards that reward having cards in exile or benefit from exile triggers',
+        weight: 2,
+        test: (o, t, sd) =>
+          /cards? in exile|from exile|exile.*(?:you may|play|cast)/i.test(o) ||
+          /process/i.test(o)
+      },
+      { name: 'Self-Exile Engines',
+        desc: 'Repeatable exile effects — Flickerwisp, Fiend Hunter, O-Ring — that trigger the commander every turn',
+        weight: 2,
+        test: (o, t, sd) =>
+          /exile.*(?:target|a ).*(?:creature|permanent|artifact|enchantment).*(?:return|until)/i.test(o) ||
+          /exile.*return.*to the battlefield/i.test(o)
+      }
+    ]
+  }
+};
+
+// UNIVERSAL ENGINE INSURANCE — always a candidate regardless of commander
+const UNIVERSAL_INSURANCE = {
+  name: 'Engine Insurance',
+  desc: 'Protection for the commander and key engine pieces, plus tutors to find missing components',
+  weight: 1,
+  test: (o, t, sd) =>
+    /hexproof|indestructible|phase out|shroud|protection from/i.test(o) ||
+    /can't be (?:the target|destroyed)/i.test(o) ||
+    (/search your library for.*card/i.test(o) && !/basic.*land/i.test(o)) ||
+    /counter target spell/i.test(o) ||
+    /regenerate|totem armor/i.test(o)
+};
+
+// Derive a human-readable engine name from detected signals
+function deriveEngineName(signalIds) {
+  // Prioritized combos first, then individual signals
+  // Token consumption combos (Baylen-style: taps tokens as fuel)
+  if (signalIds.includes('tokenConsumption') && signalIds.includes('countersSynergy')) return 'Token / Counters Engine';
+  if (signalIds.includes('tokenConsumption')) return 'Token Consumption Engine';
+  // ETB doubling (Panharmonicon / Elesh Norn)
+  if (signalIds.includes('etbDoubling') && signalIds.includes('tokenCreation')) return 'ETB / Token Doubling Engine';
+  if (signalIds.includes('etbDoubling')) return 'ETB Doubling Engine';
+  // Permanent animation (Bello-style: artifacts/enchantments become creatures)
+  if (signalIds.includes('permanentAnimation') && signalIds.includes('combatDamage')) return 'Animated Assault Engine';
+  if (signalIds.includes('permanentAnimation')) return 'Living Permanents Engine';
+  // Sacrifice combos
+  if (signalIds.includes('sacrifice') && signalIds.includes('spellCopy')) return 'Spell-Sacrifice Engine';
+  if (signalIds.includes('sacrifice') && signalIds.includes('tokenCreation')) return 'Aristocrats / Token Engine';
+  if (signalIds.includes('sacrifice')) return 'Aristocrats Engine';
+  // Enchantress BEFORE spellslinger (enchantress triggers on cast but is its own archetype)
+  if (signalIds.includes('enchantressTrigger')) return 'Enchantress Engine';
+  // Spellslinger combos
+  if (signalIds.includes('spellCopy') && signalIds.includes('manaGen')) return 'Storm / Spellslinger Engine';
+  if (signalIds.includes('spellcastTrigger') && signalIds.includes('manaGen')) return 'Storm / Spellslinger Engine';
+  if (signalIds.includes('spellCopy') && signalIds.includes('spellcastTrigger')) return 'Spellslinger Engine';
+  if (signalIds.includes('spellcastTrigger') && signalIds.includes('damageAmp')) return 'Burn / Spellslinger Engine';
+  if (signalIds.includes('spellCopy') && signalIds.includes('manaGen')) return 'Spell Copy / Storm Engine';
+  if (signalIds.includes('spellCopy')) return 'Spell Copy Engine';
+  if (signalIds.includes('spellcastTrigger')) return 'Spellslinger Engine';
+  // Vehicle
+  if (signalIds.includes('vehicleSynergy') && signalIds.includes('exilePlay')) return 'Vehicle Aggro Engine';
+  if (signalIds.includes('vehicleSynergy')) return 'Vehicle Engine';
+  // Fight / Targeting
+  if (signalIds.includes('fightTrigger') && signalIds.includes('targetOwn')) return 'Fight / Targeting Engine';
+  if (signalIds.includes('fightTrigger')) return 'Fight Engine';
+  if (signalIds.includes('targetOwn')) return 'Heroic / Targeting Engine';
+  // Ninjutsu + tribal + topdeck combos
+  if (signalIds.includes('ninjutsuSynergy') && signalIds.includes('topdeckMatters')) return 'Ninjutsu / Topdeck Engine';
+  if (signalIds.includes('ninjutsuSynergy')) return 'Ninjutsu Engine';
+  if (signalIds.includes('topdeckMatters') && signalIds.includes('combatDamage')) return 'Combat / Topdeck Engine';
+  // Keyword / ETB / Ability Copy
+  if (signalIds.includes('keywordGrant')) return 'Keyword Engine';
+  if (signalIds.includes('abilityCopy')) return 'Ability Engine';
+  if (signalIds.includes('etbTrigger') && signalIds.includes('reanimateTrigger')) return 'Reanimator Engine';
+  if (signalIds.includes('etbTrigger') && signalIds.includes('discardSynergy')) return 'Discard-ETB Engine';
+  if (signalIds.includes('etbTrigger') && signalIds.includes('graveyardMatters')) return 'Graveyard / ETB Engine';
+  if (signalIds.includes('etbTrigger')) return 'ETB / Blink Engine';
+  // Library cheat — put creatures from library onto battlefield
+  if (signalIds.includes('libraryCheat')) return 'Library Assault Engine';
+  // Token assault (tokens + combat damage, e.g. Sauron amass → combat → trigger)
+  if (signalIds.includes('tokenCreation') && signalIds.includes('combatDamage')) return 'Token Assault Engine';
+  // Graveyard
+  if (signalIds.includes('reanimateTrigger')) return 'Reanimator Engine';
+  // Landfall
+  if (signalIds.includes('landfallTrigger')) return 'Landfall Engine';
+  // Counters
+  if (signalIds.includes('countersSynergy') && signalIds.includes('costReduction')) return 'X-Spell / Counters Engine';
+  if (signalIds.includes('countersSynergy')) return 'Proliferate / Counters Engine';
+  // Planeswalker / Superfriends
+  if (signalIds.includes('planeswalkerSynergy') && signalIds.includes('topdeckMatters')) return 'Superfriends Engine';
+  if (signalIds.includes('planeswalkerSynergy')) return 'Superfriends Engine';
+  // Upkeep matters (Obeka-style: extra upkeep steps)
+  if (signalIds.includes('upkeepMatters') && signalIds.includes('combatDamage')) return 'Upkeep Assault Engine';
+  if (signalIds.includes('upkeepMatters')) return 'Upkeep Engine';
+  // Power matters (Zilortha-style: power determines lethality)
+  if (signalIds.includes('powerMatters') && signalIds.includes('fightTrigger')) return 'Power / Fight Engine';
+  if (signalIds.includes('powerMatters')) return 'Power Matters Engine';
+  // Exile matters (Ketramose-style: exile threshold)
+  if (signalIds.includes('exileMatters') && signalIds.includes('combatDamage')) return 'Exile Assault Engine';
+  if (signalIds.includes('exileMatters')) return 'Exile Matters Engine';
+  // Remaining singles
+  if (signalIds.includes('lifegainPayoff')) return 'Lifegain Engine';
+  if (signalIds.includes('combatDamage') && signalIds.includes('exilePlay')) return 'Combat Exile Engine';
+  if (signalIds.includes('combatDamage')) return 'Combat Damage Engine';
+  if (signalIds.includes('tokenCreation')) return 'Token Engine';
+  if (signalIds.includes('damageAmp')) return 'Damage Amplification Engine';
+  if (signalIds.includes('tribalSynergy')) return 'Tribal Engine';
+  if (signalIds.includes('costReduction')) return 'Cost Reduction Engine';
+  if (signalIds.includes('graveyardMatters')) return 'Graveyard Engine';
+  if (signalIds.includes('discardSynergy')) return 'Discard Engine';
+  if (signalIds.includes('topdeckMatters')) return 'Topdeck Engine';
+  if (signalIds.includes('extraTurns')) return 'Temporal Engine';
+  if (signalIds.includes('exilePlay')) return 'Exile Engine';
+  return 'Custom Strategy';
+}
+
+// ============================================================
+// SA SUGGESTION ENGINE — compositional, commander-aware
+// Reads oracle text → detects mechanical signals → scores role
+// candidates by how many deck cards match → returns top 5
 // ============================================================
 function suggestSecondaryAbilities() {
   const uncategorized = [];
@@ -1313,28 +2092,147 @@ function suggestSecondaryAbilities() {
     uncategorized.push({ name: c.name, oracle, typeLine, sd });
   });
 
-  const scored = MECH_BUCKETS.map(b => ({
-    ...b,
-    count: uncategorized.filter(c => b.test(c.oracle, c.typeLine, c.sd)).length,
-    cards: uncategorized.filter(c => b.test(c.oracle, c.typeLine, c.sd)).map(c => c.name)
-  })).filter(b => b.count >= 2)
-    .sort((a, b) => b.count - a.count);
+  // ── Get commander oracle text ──
+  const cmdr = STATE.parsedCards.find(c => c.isCommander);
+  const cmdrSD = cmdr ? STATE.scryfallData[cmdr.name] : null;
+  const cmdrOracle = cmdrSD ? (cmdrSD.oracle_text || (cmdrSD.card_faces ? cmdrSD.card_faces.map(f => f.oracle_text || '').join(' ') : '')).toLowerCase() : '';
+  const cmdrKeywords = cmdrSD?.keywords?.map(k => k.toLowerCase()) || [];
+  const cmdrTypeLine = cmdrSD ? (cmdrSD.type_line || '').toLowerCase() : '';
+  const priAbility = (STATE.characterSheet.primaryAbility || '').toLowerCase();
+  const combined = cmdrOracle + ' ' + priAbility;
 
-  const top = scored.slice(0, 5);
-  const generic = [
-    { name: 'Payloads', desc: 'Win conditions and high-impact threats', count: 0, cards: [] },
-    { name: 'Synergy Pieces', desc: 'Cards that amplify the commander\'s ability', count: 0, cards: [] },
-    { name: 'Utility', desc: 'Flexible cards that serve multiple roles', count: 0, cards: [] },
-    { name: 'Engine', desc: 'Loops and recursion that keep the machine running', count: 0, cards: [] },
-    { name: 'Finishers', desc: 'How you close out the game', count: 0, cards: [] },
-  ];
-  while (top.length < 5) {
-    const g = generic.find(g => !top.some(t => t.name === g.name));
-    if (g) top.push(g); else break;
+  // ── Phase 1: Detect signals from commander oracle ──
+  const detectedSignals = [];
+  const allCandidates = [];
+
+  for (const [key, signal] of Object.entries(CMD_SIGNALS)) {
+    if (signal.detect(combined, cmdrKeywords, cmdrTypeLine)) {
+      detectedSignals.push(key);
+      signal.roles.forEach(role => {
+        const matches = uncategorized.filter(c => role.test(c.oracle, c.typeLine, c.sd));
+        allCandidates.push({
+          name: role.name,
+          desc: role.desc,
+          weight: role.weight,
+          test: role.test,
+          signalId: key,
+          source: 'commander',
+          count: matches.length,
+          cards: matches.map(c => c.name),
+          score: role.weight * Math.max(matches.length, 1)
+        });
+      });
+    }
   }
-  return top.map(b => ({
-    name: b.name,
-    desc: b.desc + (b.cards.length > 0 ? ` (${b.count} cards: ${b.cards.slice(0, 3).join(', ')}${b.cards.length > 3 ? '...' : ''})` : '')
+
+  // ── Phase 2: Deck-level signal scan ──
+  // If the deck has 6+ cards matching a signal's roles that WASN'T detected
+  // from the commander oracle, it's a strong deck theme worth suggesting
+  for (const [key, signal] of Object.entries(CMD_SIGNALS)) {
+    if (detectedSignals.includes(key)) continue;
+    let totalMatches = 0;
+    const deckRoles = [];
+    signal.roles.forEach(role => {
+      const matches = uncategorized.filter(c => role.test(c.oracle, c.typeLine, c.sd));
+      totalMatches += matches.length;
+      if (matches.length >= 3) {
+        deckRoles.push({
+          name: role.name,
+          desc: role.desc,
+          weight: role.weight * 0.5, // reduced weight for deck-derived vs commander-derived
+          test: role.test,
+          signalId: key,
+          source: 'deck',
+          count: matches.length,
+          cards: matches.map(c => c.name),
+          score: (role.weight * 0.5) * matches.length
+        });
+      }
+    });
+    if (totalMatches >= 6) {
+      deckRoles.forEach(r => allCandidates.push(r));
+    }
+  }
+
+  // ── Phase 3: Add universal Engine Insurance ──
+  const insuranceMatches = uncategorized.filter(c => UNIVERSAL_INSURANCE.test(c.oracle, c.typeLine, c.sd));
+  allCandidates.push({
+    name: UNIVERSAL_INSURANCE.name,
+    desc: UNIVERSAL_INSURANCE.desc,
+    weight: UNIVERSAL_INSURANCE.weight,
+    test: UNIVERSAL_INSURANCE.test,
+    signalId: 'universal',
+    source: 'universal',
+    count: insuranceMatches.length,
+    cards: insuranceMatches.map(c => c.name),
+    score: UNIVERSAL_INSURANCE.weight * insuranceMatches.length
+  });
+
+  // ── Phase 4: Deduplicate by role name, merging scores ──
+  const byName = {};
+  allCandidates.forEach(c => {
+    if (byName[c.name]) {
+      byName[c.name].score = Math.max(byName[c.name].score, c.score);
+      byName[c.name].count = Math.max(byName[c.name].count, c.count);
+      // Prefer commander-sourced descriptions
+      if (c.source === 'commander' && byName[c.name].source !== 'commander') {
+        byName[c.name].desc = c.desc;
+        byName[c.name].source = c.source;
+      }
+      c.cards.forEach(card => { if (!byName[c.name].cards.includes(card)) byName[c.name].cards.push(card); });
+    } else {
+      byName[c.name] = { ...c };
+    }
+  });
+
+  // ── Phase 5: Sort by score, take top 5 ──
+  let sorted = Object.values(byName).sort((a, b) => b.score - a.score);
+
+  // Ensure Engine Insurance is in top 5 if commander signals were detected
+  // (every engine needs protection) but don't force it above strong deck themes
+  if (detectedSignals.length > 0) {
+    const insuranceIdx = sorted.findIndex(r => r.name === 'Engine Insurance');
+    if (insuranceIdx >= 5) {
+      // Move Engine Insurance into slot 5, pushing out the weakest role
+      const insurance = sorted.splice(insuranceIdx, 1)[0];
+      sorted.splice(4, 0, insurance);
+    }
+  }
+
+  const top5 = sorted.slice(0, 5);
+
+  // ── Phase 6: Fallback padding if fewer than 5 ──
+  if (top5.length < 5) {
+    // Fall back to MECH_BUCKET keyword counting for remaining slots
+    const usedNames = new Set(top5.map(r => r.name));
+    const bucketScored = MECH_BUCKETS.map(b => {
+      if (usedNames.has(b.name)) return null;
+      const matches = uncategorized.filter(c => b.test(c.oracle, c.typeLine, c.sd));
+      return matches.length >= 2 ? { name: b.name, desc: b.desc, count: matches.length, cards: matches.map(c => c.name), score: matches.length, test: b.test, source: 'fallback' } : null;
+    }).filter(Boolean).sort((a, b) => b.score - a.score);
+    while (top5.length < 5 && bucketScored.length > 0) {
+      top5.push(bucketScored.shift());
+    }
+    // Last resort: generic placeholders
+    const generic = [
+      { name: 'Synergy Pieces', desc: 'Cards that amplify the commander\'s ability', count: 0, cards: [], test: () => false },
+      { name: 'Utility', desc: 'Flexible cards that serve multiple roles', count: 0, cards: [], test: () => false },
+      { name: 'Finishers', desc: 'How you close out the game', count: 0, cards: [], test: () => false },
+    ];
+    while (top5.length < 5 && generic.length > 0) {
+      const g = generic.shift();
+      if (!top5.some(t => t.name === g.name)) top5.push(g);
+    }
+  }
+
+  // ── Store results for autoAssign and engine banner ──
+  const engineName = detectedSignals.length > 0 ? deriveEngineName(detectedSignals) : null;
+  STATE._detectedEngine = engineName ? { name: engineName, signals: detectedSignals } : null;
+  STATE._detectedRoles = top5.map(r => ({ name: r.name, test: r.test }));
+
+  return top5.map(r => ({
+    name: r.name,
+    desc: r.desc + (r.count > 0 ? ` (${r.count} cards: ${r.cards.slice(0, 3).join(', ')}${r.cards.length > 3 ? '...' : ''})` : '')
   }));
 }
 
@@ -1345,12 +2243,32 @@ function suggestSecondaryAbilities() {
 function autoAssignSACategories() {
   const cs = STATE.characterSheet;
 
-  // Build a mapping: for each defined SA name, find the best matching MECH_BUCKET
+  // Build a mapping: for each defined SA name, find the best matching test function
+  // Priority: 1) Detected role match (from signal analysis), 2) Exact MECH_BUCKET, 3) Fuzzy MECH_BUCKET
   const saBuckets = [];
+  const detectedRoles = STATE._detectedRoles || [];
   for (let i = 0; i < 5; i++) {
     const saName = (cs.saNames[i] || '').toLowerCase().trim();
     if (!saName) continue;
-    // Find the bucket whose name best matches this SA
+
+    // First: check if this SA name matches a detected role from signal analysis
+    if (detectedRoles.length > 0) {
+      const exactRole = detectedRoles.find(r => r.name.toLowerCase() === saName);
+      if (exactRole && exactRole.test) {
+        saBuckets.push({ saKey: `SA-${i+1}`, bucket: { name: exactRole.name, test: exactRole.test }, priority: i });
+        continue;
+      }
+      // Fuzzy match against detected roles
+      const fuzzyRole = detectedRoles.find(r =>
+        r.name.toLowerCase().includes(saName) || saName.includes(r.name.toLowerCase())
+      );
+      if (fuzzyRole && fuzzyRole.test) {
+        saBuckets.push({ saKey: `SA-${i+1}`, bucket: { name: fuzzyRole.name, test: fuzzyRole.test }, priority: i });
+        continue;
+      }
+    }
+
+    // Fallback: match against generic MECH_BUCKETS
     const bucket = MECH_BUCKETS.find(b => b.name.toLowerCase() === saName);
     if (bucket) {
       saBuckets.push({ saKey: `SA-${i+1}`, bucket, priority: i });
@@ -2270,6 +3188,17 @@ function renderCharacterSheet() {
     }
   }, ['Analyze Deck & Suggest Secondary Abilities']);
   form.appendChild(suggestBtn);
+
+  // Show engine detection status — tells the user we recognized their commander's archetype
+  const detectedEngine = STATE._detectedEngine;
+  if (detectedEngine && detectedEngine.name) {
+    const engineBanner = el('div', { className: 'mb-3 p-2.5 rounded-lg border border-mtg-gold/30 bg-mtg-gold/5 text-xs' });
+    const signalCount = detectedEngine.signals ? detectedEngine.signals.length : 0;
+    engineBanner.innerHTML = `<span class="text-mtg-gold font-semibold">Engine Detected:</span> <span class="text-white">${detectedEngine.name}</span>`
+      + (signalCount > 1 ? ` <span class="text-mtg-dim">(${signalCount} mechanical signals)</span>` : '') + `<br>`
+      + `<span class="text-mtg-dim">SA suggestions are tailored to your commander's strategic needs — roles describe WHY cards serve the engine, not just keywords.</span>`;
+    form.appendChild(engineBanner);
+  }
 
   for (let i = 0; i < 5; i++) {
     const row = el('div', { className: 'flex gap-2 mb-2 items-center' });
