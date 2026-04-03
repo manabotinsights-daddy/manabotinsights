@@ -2665,12 +2665,21 @@ function autoAssignSACategories() {
     if (!sd) return;
 
     // If card has no primary category, try to assign it to a matching SA
+    // Multi-match scoring: test ALL buckets, pick the one with fewest assigned cards (load balancing)
     if (!existing?.primary || existing.primary === '') {
-      for (const { saKey, bucket } of saBuckets) {
-        if (bucket.test(oracle, typeLine, sd)) {
-          STATE.categories[c.name] = { primary: saKey, secondary: existing?.secondary || '' };
-          break;
-        }
+      const matchingBuckets = saBuckets.filter(({ bucket }) => bucket.test(oracle, typeLine, sd));
+      if (matchingBuckets.length === 1) {
+        STATE.categories[c.name] = { primary: matchingBuckets[0].saKey, secondary: existing?.secondary || '' };
+      } else if (matchingBuckets.length > 1) {
+        // Pick the SA with the fewest cards assigned so far (load balance)
+        const saCounts = {};
+        matchingBuckets.forEach(({ saKey }) => { saCounts[saKey] = 0; });
+        STATE.parsedCards.forEach(pc => {
+          const pCat = STATE.categories[pc.name];
+          if (pCat?.primary && saCounts[pCat.primary] !== undefined) saCounts[pCat.primary]++;
+        });
+        const best = matchingBuckets.sort((a, b) => (saCounts[a.saKey] || 0) - (saCounts[b.saKey] || 0))[0];
+        STATE.categories[c.name] = { primary: best.saKey, secondary: existing?.secondary || '' };
       }
     }
 
@@ -3033,8 +3042,77 @@ function renderImport() {
   const app = $('#app');
   const container = el('div', { className: 'fade-in max-w-3xl mx-auto' });
 
-  container.appendChild(el('h2', { className: 'font-cinzel text-2xl text-mtg-gold mb-2' }, ['Import Your Deck']));
-  container.appendChild(el('p', { className: 'text-mtg-dim text-sm mb-4' }, ['Import from Moxfield/Archidekt URL, or paste your deck list manually.']));
+  container.appendChild(el('h2', { className: 'font-cinzel text-2xl text-mtg-gold mb-2' }, ['Manabot Insights']));
+  container.appendChild(el('p', { className: 'text-mtg-dim text-sm mb-6' }, ['Build smarter Commander decks with the Manabot framework.']));
+
+  // ==========================================
+  // BUILD FROM SCRATCH — HERO SECTION
+  // ==========================================
+  const scratchBox = el('div', { className: 'mb-6 p-6 rounded-xl border-2 border-mtg-gold bg-gradient-to-br from-mtg-gold/15 via-mtg-gold/5 to-transparent shadow-lg shadow-mtg-gold/5' });
+  scratchBox.appendChild(el('div', { className: 'text-xs font-semibold text-mtg-gold/80 uppercase tracking-wider mb-1' }, ['Recommended Starting Point']));
+  scratchBox.appendChild(el('h3', { className: 'font-cinzel text-xl text-mtg-gold mb-2' }, ['Start from Scratch']));
+  scratchBox.appendChild(el('p', { className: 'text-mtg-dim text-sm mb-4' }, ['Enter your commander and get a complete build blueprint — engine type, secondary ability recommendations, and card count targets per category. Take the blueprint to Moxfield or Archidekt, build your deck, then come back to audit it.']));
+
+  const scratchRow = el('div', { className: 'flex gap-2' });
+  const scratchInput = el('input', {
+    type: 'text',
+    className: 'flex-1 rounded-lg border px-4 py-2.5 text-sm',
+    placeholder: 'e.g., Lathril, Blade of the Elves'
+  });
+  const scratchBtn = el('button', {
+    className: 'px-5 py-2.5 rounded-lg bg-mtg-gold text-mtg-dark font-semibold hover:bg-mtg-accent transition text-sm whitespace-nowrap',
+    onClick: async () => {
+      const cmdrName = scratchInput.value.trim();
+      if (!cmdrName) {
+        alert('Please enter a commander name.');
+        return;
+      }
+      const scratchStatus = scratchBox.querySelector('.scratch-status') || el('div', { className: 'scratch-status mt-2 text-sm' });
+      if (!scratchBox.querySelector('.scratch-status')) scratchBox.appendChild(scratchStatus);
+      scratchStatus.innerHTML = '<span class="text-mtg-gold">Fetching commander...</span>';
+      scratchBtn.disabled = true;
+      scratchBtn.textContent = 'Fetching...';
+      try {
+        // Fuzzy search for commander on Scryfall
+        const fuzzyResp = await fetch(`https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(cmdrName)}`);
+        if (!fuzzyResp.ok) {
+          throw new Error(`Commander "${cmdrName}" not found on Scryfall. Check spelling and try again.`);
+        }
+        const cmdrData = await fuzzyResp.json();
+
+        // Store commander in STATE
+        STATE.scryfallData = {};
+        STATE.scryfallData[cmdrData.name] = cmdrData;
+        STATE.parsedCards = [{ qty: 1, name: cmdrData.name, isCommander: true }];
+        STATE.commanderInput = cmdrData.name;
+        STATE.characterSheet.commanderName = cmdrData.name;
+        STATE.buildPlanMode = true;
+
+        // Go directly to Character Sheet — user can hit AI Assist there
+        STATE.step = 1;
+        render();
+        return;
+      } catch (e) {
+        logError('SCRATCH_BUILD', `Failed to fetch commander: ${cmdrName}`, { error: e.message });
+        scratchStatus.innerHTML = `<span class="text-red-400">${e.message}</span>`;
+        scratchBtn.disabled = false;
+        scratchBtn.textContent = 'Generate Blueprint';
+      }
+    }
+  }, ['Generate Blueprint']);
+  scratchRow.appendChild(scratchInput);
+  scratchRow.appendChild(scratchBtn);
+  scratchBox.appendChild(scratchRow);
+  container.appendChild(scratchBox);
+
+  // ==========================================
+  // DIVIDER — "Already have a deck?"
+  // ==========================================
+  container.appendChild(el('div', { className: 'flex items-center gap-3 mb-5 mt-2' }, [
+    el('div', { className: 'flex-1 h-px bg-mtg-border' }),
+    el('span', { className: 'text-mtg-dim text-xs uppercase tracking-wider' }, ['Already have a deck? Import below']),
+    el('div', { className: 'flex-1 h-px bg-mtg-border' }),
+  ]));
 
   // URL Import Box
   const urlBox = el('div', { className: 'mb-5 p-4 rounded-lg border border-mtg-border bg-mtg-panel' });
@@ -3309,7 +3387,652 @@ function renderImport() {
     container.appendChild(navButtons(false, true));
   }
 
+  // ==========================================
+  // STANDALONE SWP EXPLORER — Five-Finger Card Evaluator
+  // ==========================================
+  container.appendChild(el('div', { className: 'flex items-center gap-3 mb-5 mt-8' }, [
+    el('div', { className: 'flex-1 h-px bg-mtg-border' }),
+    el('span', { className: 'text-mtg-dim text-xs uppercase tracking-wider' }, ['Learn the Five-Finger System']),
+    el('div', { className: 'flex-1 h-px bg-mtg-border' }),
+  ]));
+
+  const explorerBox = el('div', { className: 'mb-6 p-5 rounded-xl border border-mtg-gold/30 bg-mtg-panel' });
+  explorerBox.appendChild(el('h3', { className: 'font-cinzel text-lg text-mtg-gold mb-1' }, ['Five-Finger Card Explorer']));
+  explorerBox.appendChild(el('p', { className: 'text-mtg-dim text-xs mb-4' }, [
+    'Look up any card and see how the Five-Finger scoring system evaluates it. Enter a commander for context — the score changes based on synergy. This is the same engine used in the full audit.'
+  ]));
+
+  // Commander context input
+  const expCmdrRow = el('div', { className: 'mb-3' });
+  expCmdrRow.appendChild(el('label', { className: 'block text-xs font-semibold text-mtg-gold mb-1' }, ['Commander (for context)']));
+  const expCmdrInput = el('input', {
+    type: 'text',
+    className: 'w-full rounded-lg border px-3 py-2 text-sm',
+    placeholder: 'e.g., Lathril, Blade of the Elves'
+  });
+  expCmdrRow.appendChild(expCmdrInput);
+  explorerBox.appendChild(expCmdrRow);
+
+  // Card to evaluate input
+  const expCardRow = el('div', { className: 'flex gap-2 mb-3' });
+  const expCardInput = el('input', {
+    type: 'text',
+    className: 'flex-1 rounded-lg border px-3 py-2 text-sm',
+    placeholder: 'Card to evaluate, e.g., Beast Whisperer'
+  });
+  const expCardBtn = el('button', {
+    className: 'px-4 py-2 rounded-lg bg-mtg-gold text-mtg-dark font-semibold hover:bg-mtg-accent transition text-sm whitespace-nowrap',
+    onClick: async () => { await runExplorerEval(expCmdrInput.value.trim(), expCardInput.value.trim(), explorerResults, expCardBtn); }
+  }, ['Evaluate']);
+  expCardRow.appendChild(expCardInput);
+  expCardRow.appendChild(expCardBtn);
+  explorerBox.appendChild(expCardRow);
+
+  // Results area
+  const explorerResults = el('div', { className: 'explorer-results' });
+  explorerBox.appendChild(explorerResults);
+
+  container.appendChild(explorerBox);
+
   app.appendChild(container);
+}
+
+// ============================================================
+// STANDALONE FIVE-FINGER EXPLORER — Card evaluation without full deck
+// ============================================================
+async function runExplorerEval(cmdrName, cardName, resultsEl, btn) {
+  resultsEl.innerHTML = '';
+  if (!cardName) { resultsEl.innerHTML = '<span class="text-red-400 text-sm">Please enter a card name to evaluate.</span>'; return; }
+
+  btn.disabled = true;
+  btn.textContent = 'Fetching...';
+  resultsEl.innerHTML = '<span class="text-mtg-gold text-sm">Looking up card data...</span>';
+
+  try {
+    // Fetch the card to evaluate
+    const cardResp = await fetch(`https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(cardName)}`);
+    if (!cardResp.ok) throw new Error(`Card "${cardName}" not found. Check spelling.`);
+    const cardData = await cardResp.json();
+
+    // Fetch commander if provided
+    let cmdrData = null;
+    if (cmdrName) {
+      const cmdrResp = await fetch(`https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(cmdrName)}`);
+      if (cmdrResp.ok) cmdrData = await cmdrResp.json();
+    }
+
+    // Score the card using a standalone evaluation
+    const scores = explorerScoreCard(cardData, cmdrData);
+    const total = scores.cs + scores.dc + scores.wc + scores.iv + scores.tf;
+
+    resultsEl.innerHTML = '';
+
+    // Card header with image
+    const header = el('div', { className: 'flex gap-4 mb-4 mt-3' });
+    const imgUrl = cardData.image_uris?.normal || cardData.card_faces?.[0]?.image_uris?.normal;
+    if (imgUrl) {
+      const img = el('img', { src: imgUrl, className: 'w-32 rounded-lg shadow-lg flex-shrink-0' });
+      img.alt = cardData.name;
+      header.appendChild(img);
+    }
+    const info = el('div', { className: 'flex-1 min-w-0' });
+    info.appendChild(el('div', { className: 'font-cinzel text-lg text-white mb-1' }, [cardData.name]));
+    info.appendChild(el('div', { className: 'text-xs text-mtg-dim mb-1' }, [cardData.type_line || '']));
+    info.appendChild(el('div', { className: 'text-xs text-mtg-dim mb-2' }, [`MV ${cardData.cmc || 0}`]));
+    if (cmdrData) {
+      info.appendChild(el('div', { className: 'text-xs text-mtg-gold mb-2' }, [`Evaluating against: ${cmdrData.name}`]));
+    } else {
+      info.appendChild(el('div', { className: 'text-xs text-orange-400 mb-2' }, ['No commander context — CS score may be 0. Add a commander above for full evaluation.']));
+    }
+    // Total score badge
+    const totalColor = total >= 4 ? '#22c55e' : total >= 3 ? '#eab308' : total >= 2 ? '#f97316' : '#ef4444';
+    info.appendChild(el('div', { className: 'inline-block px-3 py-1 rounded-full font-bold text-sm', style: `background:${totalColor}22; color:${totalColor}; border:1px solid ${totalColor}44` }, [`${total.toFixed(1)} / 5`]));
+    header.appendChild(info);
+    resultsEl.appendChild(header);
+
+    // Five-finger breakdown
+    const fingerGrid = el('div', { className: 'grid grid-cols-1 sm:grid-cols-5 gap-2 mb-4' });
+    const fingerDefs = [
+      { key: 'cs', abbr: 'CS', name: 'Commander Signal', desc: scores._reasons.cs },
+      { key: 'dc', abbr: 'DC', name: 'Dual-Category', desc: scores._reasons.dc },
+      { key: 'wc', abbr: 'WC', name: 'Web Connected', desc: scores._reasons.wc },
+      { key: 'iv', abbr: 'IV', name: 'Independent Value', desc: scores._reasons.iv },
+      { key: 'tf', abbr: 'TF', name: 'Temporal Fit', desc: scores._reasons.tf }
+    ];
+    fingerDefs.forEach(fd => {
+      const val = scores[fd.key];
+      const fColor = val >= 1 ? '#22c55e' : val >= 0.5 ? '#eab308' : '#ef4444';
+      const fCard = el('div', { className: 'p-3 rounded-lg border text-center', style: `border-color:${fColor}44; background:${fColor}08` });
+      fCard.appendChild(el('div', { className: 'font-bold text-sm mb-0.5', style: `color:${fColor}` }, [`${fd.abbr}: ${val}`]));
+      fCard.appendChild(el('div', { className: 'text-[10px] text-white mb-1' }, [fd.name]));
+      fCard.appendChild(el('div', { className: 'text-[10px] text-mtg-dim' }, [fd.desc]));
+      fingerGrid.appendChild(fCard);
+    });
+    resultsEl.appendChild(fingerGrid);
+
+    // Teaching tip
+    const tipBox = el('div', { className: 'p-3 rounded border border-mtg-border bg-mtg-dark/40 text-xs text-mtg-dim' });
+    if (total >= 4) {
+      tipBox.textContent = 'This card scores exceptionally well. Cards like this are the backbone of a well-built deck — they earn their slot on multiple axes.';
+    } else if (total >= 3) {
+      tipBox.textContent = 'Solid card with good multi-axis value. Most 99-card slots should aim for 3+ on the Five-Finger scale. Look at any 0-scoring fingers for potential upgrades.';
+    } else if (total >= 2) {
+      tipBox.textContent = 'This card has room for improvement. Consider whether a similar card exists that scores higher — especially one that picks up the missing fingers.';
+    } else {
+      tipBox.textContent = 'Low score suggests this card may not be earning its slot. Every card in the 99 competes for limited space — consider replacements that better serve your commander\'s strategy.';
+    }
+    resultsEl.appendChild(tipBox);
+
+  } catch (e) {
+    resultsEl.innerHTML = `<span class="text-red-400 text-sm">${e.message}</span>`;
+  }
+  btn.disabled = false;
+  btn.textContent = 'Evaluate';
+}
+
+function explorerScoreCard(cardData, cmdrData) {
+  const scores = { cs: 0, dc: 0, wc: 0, iv: 0, tf: 0, _reasons: { cs: '', dc: '', wc: '', iv: '', tf: '' } };
+  const oracle = (cardData.oracle_text || (cardData.card_faces ? cardData.card_faces[0]?.oracle_text || '' : '')).toLowerCase();
+  const typeLine = (cardData.type_line || '').toLowerCase();
+  const cardMV = cardData.cmc || 0;
+  const cardKeywords = cardData.keywords?.map(k => k.toLowerCase()) || [];
+
+  // ── CS (Commander Signal) ──
+  if (cmdrData) {
+    const cmdrOracle = (cmdrData.oracle_text || (cmdrData.card_faces ? cmdrData.card_faces[0]?.oracle_text || '' : '')).toLowerCase();
+    const cmdrKeywords = cmdrData.keywords?.map(k => k.toLowerCase()) || [];
+    const cmdrTypeLine = (cmdrData.type_line || '').toLowerCase();
+
+    // Extract commander themes
+    const themes = [];
+    cmdrKeywords.forEach(kw => themes.push(kw));
+    if (/landfall|whenever a land.*enters/i.test(cmdrOracle)) themes.push('landfall', 'land-enters');
+    if (/deals? \d+ damage to each opponent/i.test(cmdrOracle)) themes.push('damage-opponents', 'burn');
+    if (/draw a card/i.test(cmdrOracle)) themes.push('draw');
+    if (/create.*token/i.test(cmdrOracle)) themes.push('tokens');
+    if (/\+1\/\+1 counter|proliferate/i.test(cmdrOracle)) themes.push('counters');
+    if (/sacrifice/i.test(cmdrOracle)) themes.push('sacrifice');
+    if (/graveyard/i.test(cmdrOracle)) themes.push('graveyard');
+    if (/combat|attack|dealing combat damage/i.test(cmdrOracle)) themes.push('combat');
+    if (/whenever you cast/i.test(cmdrOracle)) themes.push('cast-trigger');
+    if (/whenever.*dies/i.test(cmdrOracle)) themes.push('death-trigger');
+    if (/enchant|aura|constellation/i.test(cmdrOracle)) themes.push('enchantments');
+    if (/artifact|equipment/i.test(cmdrOracle) || /artifact/i.test(cmdrTypeLine)) themes.push('artifacts');
+    if (/copy|clone/i.test(cmdrOracle)) themes.push('copy');
+    if (/life.*gain|you gain.*life/i.test(cmdrOracle)) themes.push('lifegain');
+    if (/infect|toxic|poison/i.test(cmdrOracle)) themes.push('poison');
+    if (/morph|manifest|disguise|cloak/i.test(cmdrOracle)) themes.push('morph');
+    if (/flash|whenever.*cast.*instant|your turn/i.test(cmdrOracle)) themes.push('flash');
+    if (/cycling|cycle/i.test(cmdrOracle)) themes.push('cycling');
+
+    let csHit = false;
+    if ((themes.includes('landfall') || themes.includes('land-enters')) && /landfall|whenever a land.*enters|additional land|play.*land|put.*land.*onto the battlefield|search your library for.*land.*onto/i.test(oracle)) csHit = true;
+    if ((themes.includes('damage-opponents') || themes.includes('burn')) && /deals?.*damage.*(?:plus|additional|\+|instead|more)|double.*damage|damage to each opponent/i.test(oracle)) csHit = true;
+    if (themes.includes('tokens') && /create.*token/i.test(oracle)) csHit = true;
+    if (themes.includes('counters') && /\+1\/\+1 counter|proliferate|-1\/-1 counter/i.test(oracle)) csHit = true;
+    if (themes.includes('sacrifice') && /sacrifice.*(?:draw|gain|deal|create|add)|whenever.*dies/i.test(oracle)) csHit = true;
+    if (themes.includes('graveyard') && /graveyard|reanimate|unearth|dredge|flashback|from your graveyard/i.test(oracle)) csHit = true;
+    if (themes.includes('cast-trigger') && /whenever you cast/i.test(oracle)) csHit = true;
+    if (themes.includes('death-trigger') && /whenever.*dies|morbid/i.test(oracle)) csHit = true;
+    if (themes.includes('enchantments') && /enchant|constellation|whenever.*enchantment/i.test(oracle)) csHit = true;
+    if (themes.includes('artifacts') && (/artifact/i.test(typeLine) || /artifact/i.test(oracle))) csHit = true;
+    if (themes.includes('lifegain') && /you gain.*life|life.*gain|lifelink/i.test(oracle)) csHit = true;
+    if (themes.includes('combat') && /attack|combat|deal.*combat damage|exalted|battle cry/i.test(oracle)) csHit = true;
+    if (themes.includes('draw') && /draw a card|draw cards|card advantage/i.test(oracle)) csHit = true;
+    if (themes.includes('poison') && /infect|toxic|poison|proliferate/i.test(oracle)) csHit = true;
+    if (themes.includes('morph') && /morph|manifest|disguise|cloak|face.?down/i.test(oracle)) csHit = true;
+    if (themes.includes('flash') && /flash|at instant speed|as though it had flash/i.test(oracle)) csHit = true;
+    if (themes.includes('cycling') && /cycling|cycle/i.test(oracle)) csHit = true;
+    if (themes.includes('copy') && /copy|clone/i.test(oracle)) csHit = true;
+
+    // Shared keyword match
+    if (!csHit) {
+      if (cmdrKeywords.some(kw => cardKeywords.includes(kw) && kw !== 'flying')) csHit = true;
+    }
+
+    scores.cs = csHit ? 1 : 0;
+    scores._reasons.cs = csHit
+      ? `Directly supports ${cmdrData.name}'s strategy (themes: ${themes.filter(t => t.length > 2).slice(0, 4).join(', ')})`
+      : `No direct mechanical synergy detected with ${cmdrData.name}`;
+  } else {
+    scores._reasons.cs = 'No commander provided — cannot evaluate synergy';
+  }
+
+  // ── DC (Dual-Category) ──
+  // In standalone mode, estimate if the card naturally fits multiple framework roles
+  let dcRoles = 0;
+  if (/search your library for.*land|land.*onto the battlefield|add \{|add one mana|mana rock|treasure token/i.test(oracle) || /\{t\}:? add/i.test(oracle)) dcRoles++; // Ramp
+  if (/draw a card|draw \d+ card|scry|surveil|impulse|exile.*top.*play/i.test(oracle)) dcRoles++; // Velocity
+  if (/destroy target|exile target|counter target|deals? \d+ damage to.*creature|return.*to.*owner/i.test(oracle)) dcRoles++; // Interaction
+  if (/destroy all|exile all|deals? \d+ damage to each creature|-\d+\/-\d+ until/i.test(oracle)) dcRoles++; // Wipe
+  // SA roles — just check if it does something beyond the above
+  if (/create.*token|whenever.*enters|whenever.*dies|whenever you cast|\+1\/\+1 counter|proliferate|sacrifice.*draw|sacrifice.*create/i.test(oracle)) dcRoles++;
+  scores.dc = dcRoles >= 2 ? 1 : 0;
+  scores._reasons.dc = dcRoles >= 2
+    ? `Serves ${dcRoles} framework roles — multi-purpose card`
+    : `Primarily serves a single role — look for modal or multi-purpose alternatives`;
+
+  // ── WC (Web Connected) ──
+  // In standalone mode, estimate based on mechanical breadth (how many common archetypes it connects to)
+  const webHits = [];
+  if (/landfall|whenever a land/i.test(oracle)) webHits.push('landfall');
+  if (/create.*token/i.test(oracle)) webHits.push('tokens');
+  if (/sacrifice/i.test(oracle)) webHits.push('sacrifice');
+  if (/graveyard|from your graveyard/i.test(oracle)) webHits.push('graveyard');
+  if (/whenever.*enters/i.test(oracle)) webHits.push('ETB');
+  if (/whenever you cast/i.test(oracle)) webHits.push('spellcast');
+  if (/whenever.*dies/i.test(oracle)) webHits.push('death');
+  if (/draw a card/i.test(oracle)) webHits.push('draw');
+  if (/search your library/i.test(oracle)) webHits.push('tutor');
+  if (/\+1\/\+1 counter|proliferate/i.test(oracle)) webHits.push('counters');
+  if (/treasure/i.test(oracle)) webHits.push('treasure');
+  if (/artifact/i.test(typeLine)) webHits.push('artifact');
+  if (/enchantment/i.test(typeLine)) webHits.push('enchantment');
+  scores.wc = webHits.length >= 3 ? 1 : 0;
+  scores._reasons.wc = webHits.length >= 3
+    ? `Connects to ${webHits.length} mechanical themes (${webHits.slice(0, 4).join(', ')})`
+    : webHits.length > 0
+      ? `Touches ${webHits.length} theme(s) — in a full deck, WC checks for 5+ card-to-card connections`
+      : 'Limited mechanical connections — may be isolated in most decks';
+
+  // ── IV (Independent Value) ──
+  // Does the card do something without the commander?
+  if (/creature/i.test(typeLine)) {
+    scores.iv = 0.5; // Can at least attack/block
+    scores._reasons.iv = 'Creature body provides baseline value (0.5)';
+  }
+  if (/when.*enters.*draw|when.*enters.*create|when.*enters.*destroy|when.*enters.*exile/i.test(oracle)) {
+    scores.iv = 1;
+    scores._reasons.iv = 'ETB effect provides value regardless of commander';
+  } else if (/draw a card|create.*token|destroy target|exile target|deals? \d+ damage|add \{|\{t\}:? add/i.test(oracle)) {
+    scores.iv = 1;
+    scores._reasons.iv = 'Self-contained effect — fully functional without commander';
+  } else if (/planeswalker/i.test(typeLine)) {
+    scores.iv = 1;
+    scores._reasons.iv = 'Planeswalker — inherently independent value engine';
+  } else if (/whenever|at the beginning/i.test(oracle) && scores.iv < 1) {
+    scores.iv = Math.max(scores.iv, 0.5);
+    scores._reasons.iv = 'Triggered ability provides partial value independently (0.5)';
+  }
+  if (scores.iv === 0) {
+    scores._reasons.iv = 'May depend on specific board state or commander — low standalone value';
+  }
+
+  // ── TF (Temporal Fit) ──
+  const cmdrMV = cmdrData ? (cmdrData.cmc || 5) : 5;
+  if (cardMV <= cmdrMV + 1) {
+    scores.tf = 1;
+    scores._reasons.tf = `MV ${cardMV} fits within deployment window (commander MV ${cmdrMV} + 1)`;
+  } else if (/without paying its mana cost|suspend|evoke|foretell|overload|emerge|convoke|delve|cascade/i.test(oracle)) {
+    scores.tf = 1;
+    scores._reasons.tf = `MV ${cardMV} is high but has alternate cost / deployment`;
+  } else if (cardMV <= cmdrMV + 3 && /flash/i.test(oracle)) {
+    scores.tf = 1;
+    scores._reasons.tf = `Flash provides temporal flexibility despite MV ${cardMV}`;
+  } else {
+    scores._reasons.tf = `MV ${cardMV} exceeds deployment window (commander MV ${cmdrMV} + 1) — may be too slow`;
+  }
+
+  return scores;
+}
+
+// ============================================================
+// BUILD PLAN — Generated from commander in "Start from Scratch" flow
+// ============================================================
+function renderBuildPlan() {
+  const app = $('#app');
+  app.innerHTML = '';
+  const container = el('div', { className: 'fade-in max-w-4xl mx-auto' });
+
+  const cmdr = STATE.parsedCards.find(c => c.isCommander);
+  const cmdrSD = cmdr ? STATE.scryfallData[cmdr.name] : null;
+
+  // Header
+  container.appendChild(el('h2', { className: 'font-cinzel text-2xl text-mtg-gold mb-1' }, ['Build Plan: ' + (cmdr?.name || 'Unknown')]));
+  container.appendChild(el('p', { className: 'text-mtg-dim text-sm mb-6' }, ['Auto-generated blueprint based on your commander\'s mechanical identity.']));
+
+  // Commander Card Display
+  if (cmdrSD) {
+    const cmdrCardSection = el('div', { className: 'mb-6 p-5 rounded-lg border border-mtg-gold/40 bg-mtg-panel' });
+    cmdrCardSection.appendChild(el('h3', { className: 'font-cinzel text-lg text-mtg-gold mb-4' }, ['Commander Card']));
+
+    const cmdrCardRow = el('div', { className: 'flex gap-4 items-start' });
+
+    // Card image
+    const imgUrl = cmdrSD.image_uris?.normal || (cmdrSD.card_faces?.[0]?.image_uris?.normal) || '';
+    if (imgUrl) {
+      const img = el('img', { src: imgUrl, className: 'w-48 rounded-lg shadow-lg' });
+      cmdrCardRow.appendChild(img);
+    }
+
+    // Card details
+    const cmdrDetails = el('div', { className: 'flex-1' });
+    cmdrDetails.appendChild(el('div', { className: 'text-xl font-bold text-white mb-2' }, [cmdr.name]));
+
+    // Color identity pips
+    const colorPips = el('div', { className: 'flex gap-1 mb-3' });
+    const colors = cmdrSD.color_identity || [];
+    const colorMap = { W: 'white', U: 'blue', B: 'black', R: 'red', G: 'green' };
+    const colorBG = { W: 'bg-yellow-100', U: 'bg-blue-400', B: 'bg-slate-600', R: 'bg-red-500', G: 'bg-green-600' };
+    if (colors.length === 0) {
+      colorPips.appendChild(el('div', { className: 'w-6 h-6 rounded-full bg-gray-500 border border-gray-400' }));
+    } else {
+      colors.forEach(c => {
+        const pip = el('div', { className: `w-6 h-6 rounded-full border-2 border-white ${colorBG[c] || 'bg-gray-400'}` });
+        colorPips.appendChild(pip);
+      });
+    }
+    cmdrDetails.appendChild(colorPips);
+
+    // Type line and MV
+    cmdrDetails.appendChild(el('div', { className: 'text-sm text-mtg-dim mb-2' }, [`${cmdrSD.type_line}`]));
+    cmdrDetails.appendChild(el('div', { className: 'text-xs text-mtg-gold font-semibold mb-3' }, [`Mana Value: ${cmdrSD.cmc || 0}`]));
+
+    // Oracle text
+    const oracleText = cmdrSD.oracle_text || (cmdrSD.card_faces ? cmdrSD.card_faces[0]?.oracle_text || '' : '');
+    if (oracleText) {
+      cmdrDetails.appendChild(el('div', { className: 'text-xs text-white bg-mtg-dark/50 p-3 rounded border border-mtg-border/50' }, [oracleText]));
+    }
+
+    cmdrCardRow.appendChild(cmdrDetails);
+    cmdrCardSection.appendChild(cmdrCardRow);
+    container.appendChild(cmdrCardSection);
+  }
+
+  // Detect signals and generate SA recommendations
+  const cmdrOracle = cmdrSD ? (cmdrSD.oracle_text || (cmdrSD.card_faces ? cmdrSD.card_faces.map(f => f.oracle_text || '').join(' ') : '')).toLowerCase() : '';
+  const cmdrKeywords = cmdrSD?.keywords?.map(k => k.toLowerCase()) || [];
+  const cmdrTypeLine = cmdrSD ? (cmdrSD.type_line || '').toLowerCase() : '';
+  const combined = cmdrOracle;
+
+  // Detect which signals fire
+  const detectedSignals = [];
+  const saRoleCandidates = [];
+
+  for (const [key, signal] of Object.entries(CMD_SIGNALS)) {
+    if (signal.detect(combined, cmdrKeywords, cmdrTypeLine)) {
+      detectedSignals.push(key);
+      signal.roles.forEach(role => {
+        saRoleCandidates.push({
+          name: role.name,
+          desc: role.desc,
+          weight: role.weight,
+          signalId: key
+        });
+      });
+    }
+  }
+
+  // Sort by weight, deduplicate by name
+  const byRoleName = {};
+  saRoleCandidates.forEach(r => {
+    if (!byRoleName[r.name] || byRoleName[r.name].weight < r.weight) {
+      byRoleName[r.name] = r;
+    }
+  });
+  let topRoles = Object.values(byRoleName).sort((a, b) => b.weight - a.weight).slice(0, 4);
+
+  // Add Engine Insurance as 5th
+  topRoles.push({
+    name: UNIVERSAL_INSURANCE.name,
+    desc: UNIVERSAL_INSURANCE.desc,
+    weight: UNIVERSAL_INSURANCE.weight,
+    signalId: 'universal'
+  });
+
+  // Derive engine name
+  const engineName = detectedSignals.length > 0 ? deriveEngineName(detectedSignals) : 'Custom Engine';
+
+  // Auto-fill character sheet (use original-case oracle text, not lowercased)
+  const cmdrOracleOriginal = cmdrSD ? (cmdrSD.oracle_text || (cmdrSD.card_faces ? cmdrSD.card_faces.map(f => f.oracle_text || '').join(' ') : '')) : '';
+  STATE.characterSheet.commanderName = cmdr.name;
+  STATE.characterSheet.primaryAbility = cmdrOracleOriginal;
+  STATE.characterSheet.axis = 'payoff'; // Default to Payoff, user can change
+  STATE.characterSheet.threatLevel = 'variable'; // Default to Variable, user can change
+  STATE.characterSheet.bracket = '3'; // Default to Bracket 3 (mid-powered), user can change
+  STATE.characterSheet.saNames = topRoles.map(r => r.name);
+
+  // Character Sheet Preview
+  const csPreviewBox = el('div', { className: 'mb-6 p-5 rounded-lg border border-mtg-border bg-mtg-panel' });
+  csPreviewBox.appendChild(el('h3', { className: 'font-cinzel text-lg text-mtg-gold mb-4' }, ['Auto-Filled Character Sheet']));
+
+  const csPreviewGrid = el('div', { className: 'space-y-3' });
+
+  // Engine name banner
+  const engineBanner = el('div', { className: 'p-3 rounded bg-mtg-gold/20 border border-mtg-gold/60' });
+  engineBanner.appendChild(el('div', { className: 'text-xs text-mtg-gold font-semibold mb-1' }, ['Detected Engine']));
+  engineBanner.appendChild(el('div', { className: 'text-lg font-cinzel text-mtg-gold' }, [engineName]));
+  csPreviewGrid.appendChild(engineBanner);
+
+  // Detected signals
+  if (detectedSignals.length > 0) {
+    const signalsDiv = el('div', { className: 'p-3 rounded bg-mtg-panel border border-mtg-border' });
+    signalsDiv.appendChild(el('div', { className: 'text-xs text-mtg-gold font-semibold mb-2' }, ['Detected Signals']));
+    const signalsList = el('div', { className: 'flex flex-wrap gap-2' });
+    detectedSignals.forEach(sig => {
+      const sigName = sig.split(/(?=[A-Z])/).join(' ');
+      signalsList.appendChild(el('span', { className: 'px-2 py-1 rounded text-xs bg-mtg-gold/20 text-mtg-gold border border-mtg-gold/40' }, [sigName]));
+    });
+    signalsDiv.appendChild(signalsList);
+    csPreviewGrid.appendChild(signalsDiv);
+  }
+
+  csPreviewBox.appendChild(csPreviewGrid);
+  container.appendChild(csPreviewBox);
+
+  // Build Plan — Category Targets
+  const buildPlanBox = el('div', { className: 'mb-6 p-5 rounded-lg border border-mtg-border bg-mtg-panel' });
+  buildPlanBox.appendChild(el('h3', { className: 'font-cinzel text-lg text-mtg-gold mb-4' }, ['Build Plan: Category Targets']));
+  buildPlanBox.appendChild(el('p', { className: 'text-xs text-mtg-dim mb-4' }, ['Recommended card counts per category. Adjust based on your meta and playstyle.']));
+
+  const categoryTargets = [
+    { name: 'Ramp', range: '10–12' },
+    { name: 'Velocity (Card Draw)', range: '10–12' },
+    { name: 'Interaction (Single-target removal)', range: '8–10' },
+    { name: 'Wipes (Board wipes)', range: '3–4' },
+    { name: 'Lands', range: '35–38' },
+    ...topRoles.map(r => ({ name: r.name, range: r.name === 'Engine Insurance' ? '4–6' : (r.weight >= 2 ? '8–12' : '6–10') }))
+  ];
+
+  const categoryGrid = el('div', { className: 'grid grid-cols-1 sm:grid-cols-2 gap-3' });
+  categoryTargets.forEach((cat, idx) => {
+    const catCard = el('div', { className: 'p-3 rounded border border-mtg-gold/30 bg-mtg-dark/50' });
+    catCard.appendChild(el('div', { className: 'font-semibold text-white text-sm mb-1' }, [cat.name]));
+    catCard.appendChild(el('div', { className: 'text-mtg-gold text-sm' }, [cat.range + ' cards']));
+    categoryGrid.appendChild(catCard);
+  });
+
+  buildPlanBox.appendChild(categoryGrid);
+  container.appendChild(buildPlanBox);
+
+  // Secondary Abilities Breakdown
+  if (topRoles.length > 0) {
+    const saBox = el('div', { className: 'mb-6 p-5 rounded-lg border border-mtg-border bg-mtg-panel' });
+    saBox.appendChild(el('h3', { className: 'font-cinzel text-lg text-mtg-gold mb-4' }, ['Secondary Abilities Overview']));
+
+    const saList = el('div', { className: 'space-y-3' });
+    topRoles.forEach((role, idx) => {
+      const saCard = el('div', { className: 'p-3 rounded border border-mtg-border/50 bg-mtg-dark/40' });
+      saCard.appendChild(el('div', { className: 'font-semibold text-white mb-1' }, [role.name]));
+      saCard.appendChild(el('div', { className: 'text-xs text-mtg-dim mb-2' }, [role.desc]));
+      saCard.appendChild(el('div', { className: 'text-xs text-mtg-gold' }, ['Target: ' + (role.name === 'Engine Insurance' ? '4–6 cards' : (role.weight >= 2 ? '8–12 cards' : '6–10 cards'))]));
+      saList.appendChild(saCard);
+    });
+
+    saBox.appendChild(saList);
+    container.appendChild(saBox);
+  }
+
+  // Build Tips
+  const tipsBox = el('div', { className: 'mb-6 p-5 rounded-lg border border-mtg-gold/40 bg-mtg-gold/5' });
+  tipsBox.appendChild(el('h3', { className: 'font-cinzel text-lg text-mtg-gold mb-4' }, ['Build Tips']));
+
+  const tips = [];
+  if (detectedSignals.includes('cascadeFreecast')) {
+    tips.push('Stack your deck with impactful spells at varied mana values — cascade rewards a diverse mana curve.');
+  }
+  if (detectedSignals.includes('sacrifice')) {
+    tips.push('Prioritize recursive creatures that return from the graveyard — your engine needs a steady supply of fodder.');
+  }
+  if (detectedSignals.includes('spellcastTrigger') || detectedSignals.includes('spellCopy')) {
+    tips.push('Card draw is critical to keep the spell chain fueled. Include multiple wheels and cantrips to refund your mana investment.');
+  }
+  if (detectedSignals.includes('etbDoubling') || detectedSignals.includes('etbTrigger')) {
+    tips.push('Flicker and bounce effects amplify your commander\'s value. Include blink sources to generate additional triggers.');
+  }
+  if (detectedSignals.includes('tokenCreation')) {
+    tips.push('Token generators are the engine\'s fuel. Prioritize effects that create multiple tokens or scale with your commander.');
+  }
+  if (detectedSignals.includes('poisonInfect')) {
+    tips.push('Poison only needs 10 counters to win. Focus on evasion and proliferate rather than raw power — one unblocked infect creature plus proliferate can close games fast.');
+  }
+  if (detectedSignals.includes('equipmentMatters')) {
+    tips.push('Free equip effects like Sigarda\'s Aid and Puresteel Paladin are force multipliers. Every equipment that auto-attaches saves you tempo.');
+  }
+  if (detectedSignals.includes('voltronSolo')) {
+    tips.push('Voltron lives and dies by commander protection. Double up on totem armor, hexproof auras, and indestructible — losing your suited-up commander is devastating.');
+  }
+  if (detectedSignals.includes('morphManifest')) {
+    tips.push('Morph creatures all cost 3 to play face-down — your ramp package should hit the 3-mana threshold early. Cost reducers like Kadena turn morphs into free spells.');
+  }
+  if (detectedSignals.includes('cyclingMatters')) {
+    tips.push('Cycling cards do double duty — they trigger your commander AND replace themselves. Prioritize cheap cycling costs over the card\'s castable mode.');
+  }
+  if (detectedSignals.includes('deathTrigger')) {
+    tips.push('Death trigger decks want creatures that die profitably. Tokens, creatures with afterlife/persist/undying, and sacrifice outlets ensure a steady stream of death triggers.');
+  }
+  if (detectedSignals.includes('clonesCopy')) {
+    tips.push('Clone effects scale with the best creature on the board — yours or an opponent\'s. Include high-value ETB creatures to maximize your own clone targets.');
+  }
+  if (detectedSignals.includes('flashMoment')) {
+    tips.push('Flash turns every opponent\'s end step into your main phase. Hold up mana for interaction, then deploy threats if no response is needed.');
+  }
+  if (detectedSignals.includes('artifactSynergy')) {
+    tips.push('Cheap artifacts (0-2 mana) fuel artifact-matters commanders. Treasure/Clue/Food token generators provide both artifacts and secondary value.');
+  }
+  if (detectedSignals.includes('landfallTrigger')) {
+    tips.push('Extra land drops are your engine\'s turbo button. Exploration, Burgeoning, and fetchlands that sacrifice for two landfall triggers are premium.');
+  }
+  if (detectedSignals.includes('countersSynergy')) {
+    tips.push('Doubling Season and proliferate effects scale exponentially with counters. Even one extra proliferate per turn compounds rapidly.');
+  }
+  if (detectedSignals.includes('graveyardMatters')) {
+    tips.push('Self-mill is ramp for graveyard decks. Cards like Satyr Wayfinder and Stitcher\'s Supplier fill your yard while developing your board.');
+  }
+  tips.push('Your commander is the engine — always include protection in the Engine Insurance category.');
+
+  const tipsList = el('ul', { className: 'space-y-2' });
+  tips.slice(0, 3).forEach(tip => {
+    tipsList.appendChild(el('li', { className: 'text-sm text-mtg-dim flex gap-2' }, [
+      el('span', { className: 'text-mtg-gold flex-shrink-0' }, ['•']),
+      tip
+    ]));
+  });
+  tipsBox.appendChild(tipsList);
+  container.appendChild(tipsBox);
+
+  // Action Buttons
+  const actionBtns = el('div', { className: 'flex flex-col-reverse sm:flex-row gap-3 justify-between mt-8 pt-4 border-t border-mtg-border' });
+
+  // Copy Blueprint Button
+  const copyBtn = el('button', {
+    className: 'px-5 py-2.5 rounded border border-mtg-gold text-mtg-gold font-semibold hover:bg-mtg-gold/10 transition',
+    onClick: () => {
+      const blueprint = `Build Plan for ${cmdr.name}
+Engine: ${engineName}
+${detectedSignals.length > 0 ? 'Signals: ' + detectedSignals.join(', ') + '\n' : ''}
+Category Targets:
+- Ramp: 10–12
+- Velocity: 10–12
+- Interaction: 8–10
+- Wipes: 3–4
+- Lands: 35–38
+${topRoles.map(r => `- ${r.name}: ${r.name === 'Engine Insurance' ? '4–6' : (r.weight >= 2 ? '8–12' : '6–10')}`).join('\n')}
+
+Build Tips:
+${tips.slice(0, 3).map(t => '- ' + t).join('\n')}`;
+      navigator.clipboard.writeText(blueprint).then(() => {
+        copyBtn.textContent = 'Copied!';
+        setTimeout(() => { copyBtn.textContent = 'Copy Blueprint'; }, 2000);
+      });
+    }
+  }, ['Copy Blueprint']);
+
+  // Continue to Full Audit Button
+  const continueBtn = el('button', {
+    className: 'px-6 py-2.5 rounded bg-mtg-gold text-mtg-dark font-semibold hover:bg-mtg-accent transition',
+    onClick: () => {
+      STATE.step = 1; // Go to character sheet (Step 2)
+      STATE.buildPlanMode = true; // Flag that we came from build plan
+      render();
+    }
+  }, ['Continue to Character Sheet']);
+
+  // Start Over Button
+  const resetBtn = el('button', {
+    className: 'px-5 py-2 rounded border border-mtg-border text-mtg-dim hover:text-white hover:border-mtg-gold transition',
+    onClick: () => {
+      STATE.scryfallData = {};
+      STATE.parsedCards = [];
+      STATE.buildPlanMode = false;
+      STATE.step = 0;
+      render();
+    }
+  }, ['Start Over']);
+
+  actionBtns.appendChild(resetBtn);
+  actionBtns.appendChild(copyBtn);
+  actionBtns.appendChild(continueBtn);
+  container.appendChild(actionBtns);
+
+  app.appendChild(container);
+}
+
+// ============================================================
+// AI ASSIST — Auto-fill Character Sheet from commander signals
+// ============================================================
+function aiAssistCharacterSheet(cmdrSD, cs) {
+  const cmdrOracle = (cmdrSD.oracle_text || (cmdrSD.card_faces ? cmdrSD.card_faces.map(f => f.oracle_text || '').join(' ') : '')).toLowerCase();
+  const cmdrOracleOriginal = cmdrSD.oracle_text || (cmdrSD.card_faces ? cmdrSD.card_faces.map(f => f.oracle_text || '').join(' ') : '');
+  const cmdrKeywords = cmdrSD.keywords?.map(k => k.toLowerCase()) || [];
+  const cmdrTypeLine = (cmdrSD.type_line || '').toLowerCase();
+
+  // Detect which signals fire
+  const detectedSignals = [];
+  const saRoleCandidates = [];
+
+  for (const [key, signal] of Object.entries(CMD_SIGNALS)) {
+    if (signal.detect(cmdrOracle, cmdrKeywords, cmdrTypeLine)) {
+      detectedSignals.push(key);
+      signal.roles.forEach(role => {
+        saRoleCandidates.push({ name: role.name, desc: role.desc, weight: role.weight, signalId: key });
+      });
+    }
+  }
+
+  // Sort by weight, deduplicate by name, take top 4
+  const byRoleName = {};
+  saRoleCandidates.forEach(r => {
+    if (!byRoleName[r.name] || byRoleName[r.name].weight < r.weight) byRoleName[r.name] = r;
+  });
+  let topRoles = Object.values(byRoleName).sort((a, b) => b.weight - a.weight).slice(0, 4);
+  topRoles.push({ name: UNIVERSAL_INSURANCE.name, desc: UNIVERSAL_INSURANCE.desc, weight: UNIVERSAL_INSURANCE.weight, signalId: 'universal' });
+
+  // Derive engine name
+  const engineName = detectedSignals.length > 0 ? deriveEngineName(detectedSignals) : 'Custom Engine';
+
+  // Fill the character sheet
+  cs.primaryAbility = cmdrOracleOriginal;
+  cs.axis = 'payoff';
+  cs.threatLevel = 'variable';
+  if (!cs.bracket) cs.bracket = '3';
+  cs.saNames = topRoles.map(r => r.name);
+  cs.sa = topRoles.map(r => r.desc);
+
+  // Store engine info for display
+  STATE._detectedEngine = { name: engineName, signals: detectedSignals };
+
+  return { engineName, signals: detectedSignals, topRoles };
 }
 
 // ============================================================
@@ -3525,19 +4248,47 @@ function renderCharacterSheet() {
   form.appendChild(makeLabel('5 Secondary Abilities'));
   form.appendChild(el('p', { className: 'text-mtg-dim text-xs -mt-1 mb-1' }, ['These are the 5 custom mechanical roles that support your commander. Name each one and describe what it does.']));
 
-  // "Suggest" button — analyzes uncategorized cards to propose SAs
-  const suggestBtn = el('button', {
-    className: 'mb-3 px-4 py-2 rounded border border-mtg-gold/50 text-mtg-gold text-xs hover:bg-mtg-gold/10 transition',
+  // AI ASSIST button — uses CMD_SIGNALS to auto-fill the entire character sheet from commander oracle text
+  const aiAssistBox = el('div', { className: 'mb-4 p-4 rounded-lg border-2 border-mtg-gold/60 bg-gradient-to-r from-mtg-gold/10 to-transparent' });
+  const aiAssistRow = el('div', { className: 'flex items-center gap-3' });
+  const aiAssistBtn = el('button', {
+    className: 'px-5 py-2.5 rounded-lg bg-mtg-gold text-mtg-dark font-semibold hover:bg-mtg-accent transition text-sm whitespace-nowrap',
     onClick: () => {
-      const suggestions = suggestSecondaryAbilities();
-      suggestions.forEach((s, i) => {
-        if (!cs.saNames[i]) cs.saNames[i] = s.name;
-        if (!cs.sa[i]) cs.sa[i] = s.desc;
-      });
+      if (!cmdrSD) { alert('No commander data loaded. Go back to Step 1 and enter a commander.'); return; }
+      const result = aiAssistCharacterSheet(cmdrSD, cs);
+      // Show engine result
+      const resultArea = aiAssistBox.querySelector('.ai-assist-result');
+      if (resultArea) resultArea.remove();
+      const resultEl = el('div', { className: 'ai-assist-result mt-3 p-3 rounded bg-mtg-dark/50 border border-mtg-gold/30' });
+      resultEl.innerHTML = `<div class="text-xs text-mtg-gold font-semibold mb-1">Engine Detected: <span class="text-white">${result.engineName}</span></div>`
+        + `<div class="text-xs text-mtg-dim mb-2">${result.signals.length} signal${result.signals.length !== 1 ? 's' : ''} detected: ${result.signals.map(s => s.split(/(?=[A-Z])/).join(' ')).join(', ')}</div>`
+        + `<div class="text-xs text-mtg-dim">Character sheet auto-filled with engine type, axis, bracket, and 5 SA categories. Review and adjust as needed.</div>`;
+      aiAssistBox.appendChild(resultEl);
       render();
     }
-  }, ['Analyze Deck & Suggest Secondary Abilities']);
-  form.appendChild(suggestBtn);
+  }, ['AI Assist — Auto-Fill from Commander']);
+  const aiAssistDesc = el('div', { className: 'flex-1 min-w-0' });
+  aiAssistDesc.appendChild(el('div', { className: 'text-xs text-mtg-dim' }, ['Analyzes your commander\'s oracle text to detect mechanical signals, derive the engine type, and recommend all 5 secondary abilities.']));
+  aiAssistRow.appendChild(aiAssistBtn);
+  aiAssistRow.appendChild(aiAssistDesc);
+  aiAssistBox.appendChild(aiAssistRow);
+  form.appendChild(aiAssistBox);
+
+  // Also keep the deck-analysis suggest button for users who have imported a deck
+  if (STATE.parsedCards.length > 2) {
+    const suggestBtn = el('button', {
+      className: 'mb-3 px-4 py-2 rounded border border-mtg-border text-mtg-dim text-xs hover:text-mtg-gold hover:border-mtg-gold/50 transition',
+      onClick: () => {
+        const suggestions = suggestSecondaryAbilities();
+        suggestions.forEach((s, i) => {
+          if (!cs.saNames[i]) cs.saNames[i] = s.name;
+          if (!cs.sa[i]) cs.sa[i] = s.desc;
+        });
+        render();
+      }
+    }, ['Analyze Deck Cards & Refine SAs']);
+    form.appendChild(suggestBtn);
+  }
 
   // Show engine detection status — tells the user we recognized their commander's archetype
   const detectedEngine = STATE._detectedEngine;
@@ -3647,6 +4398,38 @@ function renderCategorize() {
   const cs = STATE.characterSheet;
 
   container.appendChild(el('h2', { className: 'font-cinzel text-2xl text-mtg-gold mb-2' }, ['Card Categorization']));
+
+  // AI Auto-Fill banner
+  const uncatCount = STATE.parsedCards.filter(c => {
+    if (c.isCommander) return false;
+    const cat = STATE.categories[c.name];
+    return !cat?.primary || cat.primary === '';
+  }).length;
+  const aiFillBox = el('div', { className: 'mb-4 p-4 rounded-lg border border-mtg-gold/40 bg-mtg-gold/5 flex flex-col sm:flex-row items-start sm:items-center gap-3 justify-between' });
+  const aiFillInfo = el('div');
+  aiFillInfo.appendChild(el('div', { className: 'text-sm font-semibold text-mtg-gold' }, ['AI Auto-Categorize']));
+  aiFillInfo.appendChild(el('div', { className: 'text-xs text-mtg-dim' }, [
+    uncatCount > 0
+      ? `${uncatCount} card${uncatCount === 1 ? '' : 's'} still uncategorized. The engine uses your commander's signals to assign cards intelligently.`
+      : 'All cards categorized! Click to re-run if you changed SA names.'
+  ]));
+  aiFillBox.appendChild(aiFillInfo);
+  const aiFillBtn = el('button', {
+    className: 'px-4 py-2 rounded bg-mtg-gold text-mtg-dark font-semibold hover:bg-mtg-accent transition text-sm whitespace-nowrap',
+    onClick: () => {
+      // Clear non-user-edited categories and re-run
+      STATE.parsedCards.forEach(c => {
+        if (!c.isCommander && !STATE.userEdited[c.name]) {
+          delete STATE.categories[c.name];
+        }
+      });
+      autoAssignSACategories();
+      render();
+    }
+  }, ['Re-run AI Fill']);
+  aiFillBox.appendChild(aiFillBtn);
+  container.appendChild(aiFillBox);
+
   container.appendChild(el('p', { className: 'text-mtg-dim text-sm mb-4' }, ['Auto-filled from deck analysis. Review and adjust — click any card name to see the full card.']));
 
   container.appendChild(makeInfoBox(
@@ -4114,6 +4897,104 @@ function renderResults() {
     });
     container.appendChild(cutTable);
   }
+
+  // ═══════════════════════════════════════════════════
+  // SWP CARD INSIGHTS — Teaching section: exemplars + weak dimension coaching
+  // ═══════════════════════════════════════════════════
+  const insightsBox = el('div', { className: 'mb-6 p-5 rounded-lg border border-mtg-gold/40 bg-mtg-panel' });
+  insightsBox.appendChild(el('h3', { className: 'font-cinzel text-lg text-mtg-gold mb-1' }, ['SWP Card Insights']));
+  insightsBox.appendChild(el('p', { className: 'text-xs text-mtg-dim mb-4' }, ['Learn what makes cards score well. Exemplars show the gold standard; dimension coaching shows where to improve.']));
+
+  // Top 5 Exemplars — highest scoring cards with WHY breakdown
+  const top5 = scored.slice().sort((a, b) => b.total - a.total).slice(0, 5);
+  if (top5.length > 0) {
+    insightsBox.appendChild(el('div', { className: 'text-sm font-semibold text-mtg-gold mb-2' }, ['Top 5 Exemplars — Cards That Earn Every Slot']));
+    const exemplarList = el('div', { className: 'space-y-2 mb-5' });
+    top5.forEach(c => {
+      const f = STATE.fingers[c.name] || {};
+      const card = el('div', { className: 'p-3 rounded border border-mtg-gold/20 bg-mtg-dark/40' });
+      const topRow = el('div', { className: 'flex justify-between items-center mb-1' });
+      topRow.appendChild(cardNameEl(c.name, 'font-semibold text-white text-sm'));
+      topRow.appendChild(el('span', { className: 'text-mtg-gold font-bold text-sm' }, [c.total.toFixed(1) + '/5']));
+      card.appendChild(topRow);
+
+      // Score breakdown with explanations
+      const reasons = [];
+      if (f.cs >= 1) reasons.push('CS: Directly supports commander strategy');
+      if (f.dc >= 1) reasons.push('DC: Serves multiple categories');
+      if (f.wc >= 1) reasons.push('WC: Connects to 5+ other cards');
+      if (f.iv >= 1) reasons.push('IV: Fully functional without commander');
+      else if (f.iv >= 0.5) reasons.push('IV: Diminished but functional alone');
+      if (f.tf >= 1) reasons.push('TF: Deployable on curve');
+      card.appendChild(el('div', { className: 'text-xs text-mtg-dim' }, [reasons.join(' · ')]));
+      exemplarList.appendChild(card);
+    });
+    insightsBox.appendChild(exemplarList);
+  }
+
+  // Dimension Coaching — for each weak SWP dimension, explain what to improve
+  const dimCoaching = [];
+  if (sdG === 'D' || sdG === 'F') {
+    dimCoaching.push({
+      dim: 'Signal Density',
+      grade: sdG,
+      tip: 'Too few cards interact with your commander\'s primary ability. Look for cards that directly trigger, enable, or amplify what your commander does. Every card should ask: "Does this make my commander better?"',
+      fix: 'Replace generic goodstuff with cards that specifically mention mechanics your commander cares about.'
+    });
+  }
+  if (ciG === 'D' || ciG === 'F') {
+    dimCoaching.push({
+      dim: 'Commander Independence',
+      grade: ciG,
+      tip: 'Your deck is too dependent on your commander being in play. If your commander gets exiled or taxed out, you need cards that function independently.',
+      fix: 'Add cards with standalone value — creatures with ETBs, planeswalkers, or enchantments that generate value on their own.'
+    });
+  }
+  if (ccpG === 'D' || ccpG === 'F') {
+    dimCoaching.push({
+      dim: 'Cross-Category Pollination',
+      grade: ccpG,
+      tip: 'Not enough cards serve double duty across categories. Look for "bridge cards" that count as both Ramp AND SA-support, or Velocity AND Interaction.',
+      fix: 'Prioritize modal spells, MDFC lands, and cards that naturally fit two roles (e.g., Skullclamp in token decks is both Velocity and SA-support).'
+    });
+  }
+
+  if (dimCoaching.length > 0) {
+    insightsBox.appendChild(el('div', { className: 'text-sm font-semibold text-mtg-gold mb-2' }, ['Dimension Coaching — Where to Improve']));
+    const coachList = el('div', { className: 'space-y-2 mb-4' });
+    dimCoaching.forEach(d => {
+      const card = el('div', { className: 'p-3 rounded border border-red-500/20 bg-red-500/5' });
+      card.appendChild(el('div', { className: 'flex justify-between items-center mb-1' }, [
+        el('span', { className: 'text-sm font-semibold text-white' }, [d.dim]),
+        el('span', { className: 'text-red-400 font-bold text-sm' }, ['Grade: ' + d.grade])
+      ]));
+      card.appendChild(el('div', { className: 'text-xs text-mtg-dim mb-1' }, [d.tip]));
+      card.appendChild(el('div', { className: 'text-xs text-mtg-gold' }, [d.fix]));
+      coachList.appendChild(card);
+    });
+    insightsBox.appendChild(coachList);
+  }
+
+  // Five-Finger Quick Reference — teaches the scoring system
+  insightsBox.appendChild(el('div', { className: 'text-sm font-semibold text-mtg-gold mb-2' }, ['Five-Finger Quick Reference']));
+  const fingerRef = el('div', { className: 'grid grid-cols-1 sm:grid-cols-5 gap-2' });
+  const fingerDefs = [
+    { abbr: 'CS', name: 'Commander Signal', desc: 'Does this card directly interact with your commander\'s primary ability?' },
+    { abbr: 'DC', name: 'Dual-Category', desc: 'Does this card serve 2+ framework categories?' },
+    { abbr: 'WC', name: 'Web Connected', desc: 'Does this card interact with 5+ other specific cards?' },
+    { abbr: 'IV', name: 'Independent Value', desc: 'Does this card function without the commander?' },
+    { abbr: 'TF', name: 'Temporal Fit', desc: 'Is this card playable within your deployment window?' }
+  ];
+  fingerDefs.forEach(fd => {
+    const fCard = el('div', { className: 'p-2 rounded border border-mtg-border/50 bg-mtg-dark/30 text-center' });
+    fCard.appendChild(el('div', { className: 'text-mtg-gold font-bold text-sm' }, [fd.abbr]));
+    fCard.appendChild(el('div', { className: 'text-xs text-white mb-1' }, [fd.name]));
+    fCard.appendChild(el('div', { className: 'text-[10px] text-mtg-dim' }, [fd.desc]));
+    fingerRef.appendChild(fCard);
+  });
+  insightsBox.appendChild(fingerRef);
+
+  container.appendChild(insightsBox);
 
   container.appendChild(makeFeedbackBox('results', 'Do these results feel accurate? Any scores that surprise you? What\'s missing from the analysis?'));
   container.appendChild(navButtons(true, true, 'Export & Finish'));
