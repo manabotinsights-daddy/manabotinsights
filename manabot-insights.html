@@ -152,6 +152,10 @@ select:focus, input:focus, textarea:focus { border-color: #d4a843 !important; ou
   <div class="flex items-center gap-3">
     <div id="step-nav" class="flex items-center gap-3"></div>
     <button id="new-audit-btn" class="hidden text-xs border border-mtg-border rounded px-2.5 py-1 text-mtg-dim hover:text-red-400 hover:border-red-400/50 transition ml-2" title="Clear session and start a new audit" onclick="if(confirm('Start a new audit? Current progress will be cleared.')){clearSavedState();location.reload();}">New</button>
+    <button id="error-log-toggle" class="hidden text-xs border border-red-400/30 rounded px-2.5 py-1 text-red-400 hover:bg-red-400/10 transition ml-2 relative" title="View error log" onclick="toggleErrorLog()">
+      <span class="error-dot hidden absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
+      Log
+    </button>
   </div>
 </header>
 
@@ -163,7 +167,133 @@ select:focus, input:focus, textarea:focus { border-color: #d4a843 !important; ou
   <img id="card-modal-img" class="max-h-[80vh] max-w-[90vw] rounded-lg shadow-2xl" />
 </div>
 
+<!-- ERROR LOG PANEL (toggle from footer) -->
+<div id="error-log-panel" class="fixed bottom-0 left-0 right-0 z-40 hidden" style="max-height:45vh;">
+  <div class="bg-mtg-panel border-t border-mtg-border shadow-2xl flex flex-col" style="max-height:45vh;">
+    <div class="flex items-center justify-between px-4 py-2 border-b border-mtg-border bg-mtg-dark flex-shrink-0">
+      <div class="flex items-center gap-2">
+        <span class="text-red-400 text-xs font-mono font-bold">ERROR LOG</span>
+        <span id="error-count-badge" class="text-xs text-mtg-dim">(0 entries)</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <button onclick="clearErrorLog()" class="text-xs text-mtg-dim hover:text-white border border-mtg-border rounded px-2 py-0.5">Clear</button>
+        <button onclick="copyErrorLog()" class="text-xs text-mtg-dim hover:text-mtg-gold border border-mtg-border rounded px-2 py-0.5">Copy All</button>
+        <button onclick="toggleErrorLog()" class="text-xs text-mtg-dim hover:text-white px-2 py-0.5">&times;</button>
+      </div>
+    </div>
+    <div id="error-log-entries" class="overflow-y-auto p-3 space-y-2 font-mono text-xs" style="max-height:calc(45vh - 40px);"></div>
+  </div>
+</div>
+
 <script>
+// ============================================================
+// ERROR LOG — captures detailed diagnostics for debugging
+// ============================================================
+const ERROR_LOG = [];
+
+function logError(category, message, details = {}) {
+  const entry = {
+    ts: new Date().toISOString(),
+    cat: category,
+    msg: message,
+    details: details,
+    userAgent: navigator.userAgent,
+    url: window.location.href
+  };
+  ERROR_LOG.push(entry);
+  console.error(`[Manabot ${category}]`, message, details);
+  updateErrorLogUI();
+}
+
+function updateErrorLogUI() {
+  const badge = document.getElementById('error-count-badge');
+  const container = document.getElementById('error-log-entries');
+  const toggleBtn = document.getElementById('error-log-toggle');
+  if (badge) badge.textContent = `(${ERROR_LOG.length} entries)`;
+  if (toggleBtn) {
+    toggleBtn.classList.toggle('hidden', ERROR_LOG.length === 0);
+    if (ERROR_LOG.length > 0) {
+      toggleBtn.querySelector('.error-dot')?.classList.remove('hidden');
+    }
+  }
+  if (!container) return;
+  container.innerHTML = '';
+  ERROR_LOG.forEach((entry, i) => {
+    const div = document.createElement('div');
+    div.className = 'p-2 rounded bg-mtg-dark border border-mtg-border';
+
+    // Header line: timestamp + category
+    const header = document.createElement('div');
+    header.className = 'flex items-center gap-2 mb-1';
+    header.innerHTML = `<span class="text-mtg-dim">${entry.ts.split('T')[1].split('.')[0]}</span>`
+      + `<span class="px-1.5 py-0.5 rounded text-[0.6rem] font-bold uppercase ${
+        entry.cat === 'FETCH' ? 'bg-red-500/20 text-red-400' :
+        entry.cat === 'CORS' ? 'bg-orange-500/20 text-orange-400' :
+        entry.cat === 'PARSE' ? 'bg-yellow-500/20 text-yellow-400' :
+        entry.cat === 'API' ? 'bg-blue-500/20 text-blue-400' :
+        'bg-mtg-border text-mtg-dim'
+      }">${entry.cat}</span>`;
+    div.appendChild(header);
+
+    // Message
+    const msg = document.createElement('div');
+    msg.className = 'text-white mb-1';
+    msg.textContent = entry.msg;
+    div.appendChild(msg);
+
+    // Details (collapsible)
+    if (Object.keys(entry.details).length > 0) {
+      const details = document.createElement('details');
+      details.className = 'mt-1';
+      const summary = document.createElement('summary');
+      summary.className = 'text-mtg-dim cursor-pointer hover:text-mtg-gold text-[0.65rem]';
+      summary.textContent = 'Details';
+      details.appendChild(summary);
+
+      const pre = document.createElement('pre');
+      pre.className = 'mt-1 p-2 rounded bg-black/30 text-[0.6rem] text-mtg-dim overflow-x-auto whitespace-pre-wrap break-all';
+      // Format details — truncate very long values
+      const formatted = {};
+      Object.entries(entry.details).forEach(([k, v]) => {
+        if (typeof v === 'string' && v.length > 500) {
+          formatted[k] = v.slice(0, 500) + `... (${v.length} chars total)`;
+        } else {
+          formatted[k] = v;
+        }
+      });
+      pre.textContent = JSON.stringify(formatted, null, 2);
+      details.appendChild(pre);
+      div.appendChild(details);
+    }
+
+    container.appendChild(div);
+  });
+  // Auto-scroll to bottom
+  container.scrollTop = container.scrollHeight;
+}
+
+function toggleErrorLog() {
+  const panel = document.getElementById('error-log-panel');
+  if (panel) panel.classList.toggle('hidden');
+}
+
+function clearErrorLog() {
+  ERROR_LOG.length = 0;
+  updateErrorLogUI();
+}
+
+function copyErrorLog() {
+  const text = ERROR_LOG.map(e => {
+    let line = `[${e.ts}] [${e.cat}] ${e.msg}`;
+    if (Object.keys(e.details).length > 0) line += '\n  ' + JSON.stringify(e.details);
+    return line;
+  }).join('\n\n');
+  navigator.clipboard.writeText(text || '(empty log)').then(() => {
+    const btn = document.querySelector('#error-log-panel button[onclick="copyErrorLog()"]');
+    if (btn) { btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = 'Copy All'; }, 1500); }
+  });
+}
+
 // ============================================================
 // STATE
 // ============================================================
@@ -497,39 +627,111 @@ const SAMPLE_DECK = {
 // ============================================================
 async function fetchDeckFromURL(url) {
   url = url.trim();
+  logError('FETCH', `Starting deck import from URL`, { inputUrl: url });
 
   // CORS proxy — needed because Archidekt/Moxfield APIs don't allow cross-origin from static sites
-  async function corsProxy(apiUrl) {
-    // Try direct first (works in dev/localhost), fall back to proxy
-    try {
-      const direct = await fetch(apiUrl);
-      if (direct.ok) return await direct.json();
-    } catch (e) { /* CORS blocked — expected, use proxy */ }
+  // Uses allorigins.win /raw endpoint (returns API JSON directly, no wrapper parsing needed)
+  async function corsProxy(apiUrl, label) {
+    const errors = [];
 
-    // Use allorigins as CORS proxy
-    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(apiUrl)}`;
-    const proxyResp = await fetch(proxyUrl);
-    if (!proxyResp.ok) throw new Error('Could not reach the deck. Check the URL and try again.');
-    const proxyData = await proxyResp.json();
-    if (!proxyData.contents) throw new Error('Empty response. Make sure the deck is public.');
-    return JSON.parse(proxyData.contents);
+    // Helper: fetch with a timeout so we don't hang forever on dead proxies
+    async function fetchWithTimeout(url, timeoutMs = 15000) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const resp = await fetch(url, { signal: controller.signal });
+        clearTimeout(timer);
+        return resp;
+      } catch (e) {
+        clearTimeout(timer);
+        throw e;
+      }
+    }
+
+    // Step 1: Try direct fetch (works in localhost / same-origin)
+    logError('CORS', `[1/3] Direct fetch to ${label}`, { apiUrl });
+    try {
+      const direct = await fetchWithTimeout(apiUrl, 8000);
+      if (direct.ok) {
+        const json = await direct.json();
+        logError('API', `Direct fetch succeeded for ${label}`, { cardCount: json.cards?.length });
+        return json;
+      }
+      errors.push(`Direct: HTTP ${direct.status}`);
+      logError('CORS', `Direct fetch HTTP ${direct.status}`, { status: direct.status });
+    } catch (e) {
+      errors.push(`Direct: ${e.name === 'AbortError' ? 'timeout' : e.message}`);
+      logError('CORS', `Direct fetch blocked: ${e.message}`, { errorName: e.name });
+    }
+
+    // Step 2: allorigins.win /raw endpoint — returns the proxied JSON directly (no wrapper)
+    const rawUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(apiUrl)}`;
+    logError('CORS', `[2/3] allorigins /raw proxy`, { rawUrl });
+    try {
+      const rawResp = await fetchWithTimeout(rawUrl, 15000);
+      logError('CORS', `allorigins /raw response: ${rawResp.status}`, { status: rawResp.status, ok: rawResp.ok });
+      if (rawResp.ok) {
+        const json = await rawResp.json();
+        logError('API', `allorigins /raw succeeded for ${label}`, { cardCount: json.cards?.length, keys: Object.keys(json).slice(0, 8) });
+        return json;
+      }
+      const errText = await rawResp.text().catch(() => '');
+      errors.push(`allorigins/raw: HTTP ${rawResp.status} — ${errText.slice(0, 100)}`);
+      logError('CORS', `allorigins /raw non-OK`, { status: rawResp.status, body: errText.slice(0, 300) });
+    } catch (e) {
+      errors.push(`allorigins/raw: ${e.name === 'AbortError' ? 'timeout (15s)' : e.message}`);
+      logError('CORS', `allorigins /raw failed: ${e.message}`, { errorName: e.name });
+    }
+
+    // Step 3: allorigins.win /get endpoint (JSON wrapper with .contents field) as fallback
+    const getUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(apiUrl)}`;
+    logError('CORS', `[3/3] allorigins /get proxy (wrapper)`, { getUrl });
+    try {
+      const getResp = await fetchWithTimeout(getUrl, 15000);
+      logError('CORS', `allorigins /get response: ${getResp.status}`, { status: getResp.status });
+      if (!getResp.ok) {
+        errors.push(`allorigins/get: HTTP ${getResp.status}`);
+        throw new Error(`HTTP ${getResp.status}`);
+      }
+      const wrapper = await getResp.json();
+      if (!wrapper.contents) {
+        errors.push('allorigins/get: empty contents');
+        logError('CORS', `allorigins /get returned empty contents`, { keys: Object.keys(wrapper) });
+        throw new Error('Empty contents');
+      }
+      const parsed = JSON.parse(wrapper.contents);
+      logError('API', `allorigins /get succeeded for ${label}`, { cardCount: parsed.cards?.length });
+      return parsed;
+    } catch (e) {
+      if (!errors[errors.length - 1]?.startsWith('allorigins/get')) {
+        errors.push(`allorigins/get: ${e.message}`);
+      }
+      logError('CORS', `allorigins /get failed: ${e.message}`, { errorName: e.name });
+    }
+
+    // All methods exhausted
+    logError('CORS', `All proxy methods failed for ${label}`, { errors });
+    throw new Error(
+      `Could not fetch deck from ${label}. Tried 3 methods:\n` +
+      errors.map((e, i) => `  ${i + 1}. ${e}`).join('\n') +
+      `\n\nThis usually means the CORS proxy service is temporarily down. Try again in a minute, or paste your decklist manually.`
+    );
   }
 
   // Moxfield: https://www.moxfield.com/decks/DECKID
   const moxMatch = url.match(/moxfield\.com\/decks\/([a-zA-Z0-9_-]+)/);
   if (moxMatch) {
     const deckId = moxMatch[1];
-    const data = await corsProxy(`https://api2.moxfield.com/v3/decks/all/${deckId}`);
+    logError('PARSE', `Detected Moxfield URL`, { deckId });
+    const data = await corsProxy(`https://api2.moxfield.com/v3/decks/all/${deckId}`, 'Moxfield');
     let lines = [];
     let cmdrName = '';
-    // Commanders
     if (data.commanders) {
       Object.values(data.commanders).forEach(entry => {
         const name = entry.card?.name || entry.name || '';
         if (name) { lines.push(`1 ${name} *CMDR*`); cmdrName = name; }
       });
     }
-    // Mainboard
     if (data.mainboard) {
       Object.values(data.mainboard).forEach(entry => {
         const name = entry.card?.name || entry.name || '';
@@ -537,6 +739,7 @@ async function fetchDeckFromURL(url) {
         if (name) lines.push(`${qty} ${name}`);
       });
     }
+    logError('PARSE', `Moxfield deck parsed`, { commander: cmdrName, cardCount: lines.length });
     if (lines.length === 0) throw new Error('Deck appears empty. Make sure the deck is public and not empty.');
     return { text: lines.join('\n'), commander: cmdrName };
   }
@@ -545,7 +748,8 @@ async function fetchDeckFromURL(url) {
   const archiMatch = url.match(/archidekt\.com\/(?:api\/)?decks\/(\d+)/);
   if (archiMatch) {
     const deckId = archiMatch[1];
-    const data = await corsProxy(`https://archidekt.com/api/decks/${deckId}/`);
+    logError('PARSE', `Detected Archidekt URL`, { deckId });
+    const data = await corsProxy(`https://archidekt.com/api/decks/${deckId}/`, 'Archidekt');
     let lines = [];
     let cmdrName = '';
     if (data.cards) {
@@ -561,10 +765,13 @@ async function fetchDeckFromURL(url) {
         }
       });
     }
+    logError('PARSE', `Archidekt deck parsed`, { commander: cmdrName, cardCount: lines.length, totalApiCards: data.cards?.length });
     if (lines.length === 0) throw new Error('Deck appears empty. Make sure the deck is public.');
     return { text: lines.join('\n'), commander: cmdrName };
   }
 
+  // No URL pattern matched
+  logError('PARSE', `URL pattern not recognized`, { url, hasMoxfield: url.includes('moxfield'), hasArchidekt: url.includes('archidekt') });
   throw new Error('URL not recognized. Paste a Moxfield or Archidekt deck URL (e.g., https://archidekt.com/decks/12345 or https://www.moxfield.com/decks/abc123).');
 }
 
