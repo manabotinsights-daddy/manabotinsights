@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Manabot Insights — Deck Audit Tool (Beta)</title>
+<title>Manabot Insights — Deck Audit Tool v0.3</title>
 <!-- Analytics: replace data-domain with your actual domain once registered -->
 <!-- <script defer data-domain="manabotinsights.com" src="https://plausible.io/js/script.js"></script> -->
 <script src="https://cdn.tailwindcss.com"></script>
@@ -20,7 +20,34 @@ tailwind.config = {
 </script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Cinzel:wght@600;700&display=swap');
-body { font-family: 'Inter', sans-serif; background: #0c0e14; color: #e2e8f0; }
+body {
+  font-family: 'Inter', sans-serif;
+  background: #0c0e14;
+  color: #e2e8f0;
+  position: relative;
+  min-height: 100vh;
+}
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(ellipse 600px 400px at 10% 20%, rgba(212,168,67,0.04) 0%, transparent 70%),
+    radial-gradient(ellipse 500px 500px at 85% 15%, rgba(59,130,246,0.03) 0%, transparent 70%),
+    radial-gradient(ellipse 400px 600px at 50% 80%, rgba(168,85,247,0.03) 0%, transparent 70%),
+    radial-gradient(ellipse 300px 300px at 20% 70%, rgba(34,197,94,0.03) 0%, transparent 70%),
+    radial-gradient(ellipse 350px 350px at 75% 65%, rgba(239,68,68,0.025) 0%, transparent 70%);
+}
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  opacity: 0.018;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180' viewBox='0 0 180 180'%3E%3Cpath d='M90 20c-8 12-20 28-20 42 0 16 9 28 20 28s20-12 20-28c0-14-12-30-20-42z' fill='%23d4a843'/%3E%3Ccircle cx='40' cy='140' r='14' fill='none' stroke='%233b82f6' stroke-width='1.5'/%3E%3Cpath d='M140 125c-5 0-10 3-12 8-2-5-7-8-12-8 8-8 16-20 12-30 4 10 4 22 12 30z' fill='%23111' stroke='%23666' stroke-width='0.8'/%3E%3C/svg%3E");
+  background-size: 180px 180px;
+}
 h1, h2, h3, .font-cinzel { font-family: 'Cinzel', serif; }
 .step-dot.active { background: #d4a843; box-shadow: 0 0 12px #d4a84366; }
 .step-dot.done { background: #22c55e; }
@@ -134,6 +161,7 @@ select:focus, input:focus, textarea:focus { border-color: #d4a843 !important; ou
 .info-box[open] summary::before { transform: rotate(90deg); }
 .fade-in { animation: fadeIn 0.3s ease-in; }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+header { border-image: linear-gradient(90deg, transparent, #d4a84333, #3b82f622, #a855f722, #d4a84333, transparent) 1; }
 .tooltip { position: relative; }
 .tooltip:hover::after { content: attr(data-tip); position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); background: #2a2f3e; color: #e2e8f0; padding: 6px 10px; border-radius: 6px; font-size: 0.7rem; white-space: normal; max-width: 220px; z-index: 50; line-height: 1.3; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
 </style>
@@ -146,7 +174,7 @@ select:focus, input:focus, textarea:focus { border-color: #d4a843 !important; ou
     <a href="index.html" class="text-mtg-dim hover:text-mtg-gold transition text-xs border border-mtg-border rounded px-2.5 py-1 hover:border-mtg-gold/50" title="Back to Home">&larr; Home</a>
     <div>
       <h1 class="font-cinzel text-mtg-gold text-xl tracking-wide">Manabot Insights</h1>
-      <p class="text-mtg-dim text-xs mt-0.5">Deck Audit Tool — Beta v0.3-cors-fix</p>
+      <p class="text-mtg-dim text-xs mt-0.5">Deck Audit Tool — v0.3</p>
     </div>
   </div>
   <div class="flex items-center gap-3">
@@ -5301,7 +5329,7 @@ function renderExport() {
     className: 'w-full mb-3 px-5 py-3 rounded-lg border border-mtg-gold text-mtg-gold hover:bg-mtg-gold/10 transition text-sm font-semibold',
     onClick: () => {
       const exportData = {
-        version: '0.2-beta',
+        version: '0.3',
         exportDate: new Date().toISOString(),
         characterSheet: STATE.characterSheet,
         cards: STATE.parsedCards.map(c => ({
@@ -5448,7 +5476,7 @@ function generateShareURL() {
     mv: avgMV, fg: avgFinger,
     ct: counts,
     fl: flags.map(f => f.label),
-    v: '0.1'
+    v: '0.3'
   };
   const json = JSON.stringify(shareData);
   const encoded = btoa(unescape(encodeURIComponent(json)));
