@@ -1366,7 +1366,7 @@ const CMD_SIGNALS = {
 
   // ── SPELLCAST TRIGGER — commander triggers on casting spells ──
   spellcastTrigger: {
-    detect: o => (/whenever you cast.*(?:instant|sorcery|noncreature)/i.test(o) || /whenever you cast (?:a|an) (?:\w+ )?spell/i.test(o) || /magecraft|(?:^|\s)storm(?:\s|$)/i.test(o)) && !/whenever you cast an enchantment/i.test(o),
+    detect: o => (/whenever you cast.*(?:instant|sorcery|noncreature)/i.test(o) || /whenever you cast (?:a|an) (?:\w+ )?spell/i.test(o) || /magecraft|(?:^|\s)storm(?:\s|$)|replicate|conspire|buyback|rebound|epic/i.test(o)) && !/whenever you cast an enchantment/i.test(o),
     roles: [
       { name: 'Card Velocity',
         desc: 'Cantrips, wheels, and draw to keep the spell chain going — the engine refunds value but needs fuel',
@@ -1410,7 +1410,7 @@ const CMD_SIGNALS = {
 
   // ── COST REDUCTION — commander makes spells cheaper ──
   costReduction: {
-    detect: o => /cost.*\{?\d+\}? less|costs? .*less to cast|without paying its mana cost/i.test(o),
+    detect: o => /cost.*\{?\d+\}? less|costs? .*less to cast|without paying its mana cost|affinity for|convoke|improvise|delve|emerge \{/i.test(o),
     roles: [
       { name: 'Payload Spells',
         desc: 'Expensive or X-cost spells made efficient by cost reduction — the payoff for the discount',
@@ -1496,7 +1496,7 @@ const CMD_SIGNALS = {
 
   // ── TOKEN CREATION — commander creates tokens or cares about tokens ──
   tokenCreation: {
-    detect: o => (/create.*(?:creature )?token|whenever.*token.*enters|token.*creature/i.test(o) && /whenever|each|attack/i.test(o)) || /amass/i.test(o),
+    detect: o => (/create.*(?:creature )?token|whenever.*token.*enters|token.*creature/i.test(o) && /whenever|each|attack/i.test(o)) || /amass|populate|living weapon|embalm|eternalize|afterlife/i.test(o),
     roles: [
       { name: 'Token Doublers',
         desc: 'Doubling Season, Anointed Procession — exponential token scaling',
@@ -1560,7 +1560,7 @@ const CMD_SIGNALS = {
 
   // ── GRAVEYARD MATTERS — commander cares about cards in graveyard ──
   graveyardMatters: {
-    detect: o => /cards? in your graveyard|from your graveyard|threshold|delirium|(?:return|cast|play).*from.*(?:your )?graveyard/i.test(o),
+    detect: o => /cards? in your graveyard|from your graveyard|threshold|delirium|dredge|retrace|scavenge|recover|flashback|(?:return|cast|play).*from.*(?:your )?graveyard/i.test(o),
     roles: [
       { name: 'Graveyard Stockpile',
         desc: 'Self-mill, loot, and discard to stock the graveyard with fuel',
@@ -1577,7 +1577,7 @@ const CMD_SIGNALS = {
 
   // ── +1/+1 COUNTERS — commander uses counters ──
   countersSynergy: {
-    detect: o => /proliferate/i.test(o) || (/\+1\/\+1 counter/i.test(o) && /whenever|each|double|put|distribute|enters.*with/i.test(o)),
+    detect: o => /proliferate|modular|graft|evolve|sunburst|reinforce|adapt/i.test(o) || (/\+1\/\+1 counter/i.test(o) && /whenever|each|double|put|distribute|enters.*with/i.test(o)) || (/-1\/-1 counter/i.test(o) && /whenever|wither|infect|persist/i.test(o)),
     roles: [
       { name: 'Counter Amplification',
         desc: 'Doubling Season, Hardened Scales, proliferate — exponential counter scaling',
@@ -1667,7 +1667,7 @@ const CMD_SIGNALS = {
 
   // ── TRIBAL — commander cares about creature types ──
   tribalSynergy: {
-    detect: (o, kw, t) => /all .*(creatures you control|elves|goblins|zombies|vampires|merfolk|warriors|wizards|knights|humans|dragons|hydras|dinosaurs|soldiers|spirits|angels|demons|beasts|ninjas?|rogues?|clerics?|shamans?|orcs?|armou?r?ies?) get|other .* get \+|choose a creature type|whenever (?:a|an) (?:ninja|elf|goblin|zombie|vampire|merfolk|warrior|wizard|knight|human|dragon|hydra|dinosaur|soldier|spirit|angel|demon|beast|rogue|cleric|shaman|pirate|cat|dog|rat|sliver|ally|elemental|faerie|bird|orc|army|rabbit|raccoon).*(?:you control|deals|enters|dies|attacks)/i.test(o),
+    detect: (o, kw, t) => /all .*(creatures you control|elves|goblins|zombies|vampires|merfolk|warriors|wizards|knights|humans|dragons|hydras|dinosaurs|soldiers|spirits|angels|demons|beasts|ninjas?|rogues?|clerics?|shamans?|orcs?|armou?r?ies?) get|other .* get \+|choose a creature type|whenever (?:a|an) (?:ninja|elf|goblin|zombie|vampire|merfolk|warrior|wizard|knight|human|dragon|hydra|dinosaur|soldier|spirit|angel|demon|beast|rogue|cleric|shaman|pirate|cat|dog|rat|sliver|ally|elemental|faerie|bird|orc|army|rabbit|raccoon|advisor|insect|spider|wurm|ooze|fungus|saproling|squirrel|bear|wolf|werewolf|horror|phyrexian).*(?:you control|deals|enters|dies|attacks)/i.test(o),
     roles: [
       { name: 'Tribal Lords',
         desc: 'Type-specific lords and anthems for the tribe',
@@ -1977,6 +1977,316 @@ const CMD_SIGNALS = {
           /exile.*return.*to the battlefield/i.test(o)
       }
     ]
+  },
+
+  // ── SELF-FLICKER — commander exiles itself and returns, generating ETB triggers ──
+  selfFlicker: {
+    detect: o => /exile (?:this|it|~|him|her).*return (?:it|this|~|him|her).*to the battlefield|return (?:it|this|~).*to the battlefield.*(?:end step|end of turn)/i.test(o),
+    roles: [
+      { name: 'ETB Payoffs',
+        desc: 'Permanents with enter-the-battlefield triggers that fire every time the commander flickers back — Impact Tremors, Purphoros, Panharmonicon',
+        weight: 3,
+        test: (o, t, sd) =>
+          /whenever (?:a|another) creature enters/i.test(o) ||
+          /whenever .* enters.*(?:deal|lose|gain|draw|create|mill|put|counter)/i.test(o)
+      },
+      { name: 'Leave-the-Battlefield Payoffs',
+        desc: 'Effects that trigger when permanents leave — Warstorm Surge\'s counterpart for exits, plus death/exile triggers',
+        weight: 2,
+        test: (o, t, sd) =>
+          /whenever (?:a|another).*(?:creature|permanent).*(?:leaves|dies|is exiled)/i.test(o) ||
+          /whenever .* leaves the battlefield/i.test(o)
+      },
+      { name: 'Flicker Amplifiers',
+        desc: 'Additional flicker/blink effects to multiply ETB triggers beyond the commander\'s own self-exile',
+        weight: 1,
+        test: (o, t, sd) =>
+          /exile.*return.*to the battlefield|flicker/i.test(o)
+      }
+    ]
+  },
+
+  // ── PUNISHER — commander punishes opponents for casting spells or taking actions ──
+  punisher: {
+    detect: o => /whenever an opponent casts.*(?:deal|lose|damage|pay|tax)|whenever.*opponent.*casts?.*(?:spell|creature).*(?:deal|lose|damage)/i.test(o),
+    roles: [
+      { name: 'Group Slug Payoffs',
+        desc: 'Additional punisher effects that stack with the commander — Harsh Mentor, Ankh of Mishra, Zo-Zu the Punisher',
+        weight: 3,
+        test: (o, t, sd) =>
+          /whenever.*(?:opponent|player).*(?:casts?|plays?).*(?:deal|lose|pay)/i.test(o) ||
+          /whenever.*(?:creature|land|artifact).*enters.*(?:deal|lose)/i.test(o)
+      },
+      { name: 'Damage Scaling',
+        desc: 'Effects that double or redirect the punishment damage — Fiery Emancipation, Wound Reflection',
+        weight: 2,
+        test: (o, t, sd) =>
+          /double.*damage|deals?.*additional.*damage|if.*would deal damage.*deals.*instead/i.test(o) ||
+          /whenever.*opponent.*loses? life.*lose/i.test(o)
+      },
+      { name: 'Forced Actions',
+        desc: 'Effects that force opponents to cast more spells or take taxed actions — Possibility Storm, Knowledge Pool',
+        weight: 2,
+        test: (o, t, sd) =>
+          /each player.*cast|each opponent.*(?:draw|discard|mill|sacrifice)/i.test(o) ||
+          /whenever.*player casts.*(?:also|in addition|copy)/i.test(o)
+      }
+    ]
+  },
+
+  // ── MILL ENGINE — commander mills opponents or cares about milling ──
+  millEngine: {
+    detect: o => /(?:target player|each (?:player|opponent)) mills? \d+|mill.*twelve|mill.*(?:cards equal|half)/i.test(o),
+    roles: [
+      { name: 'Mill Acceleration',
+        desc: 'Additional mill effects to speed up the library destruction — Hedron Crab, Maddening Cacophony',
+        weight: 3,
+        test: (o, t, sd) =>
+          /(?:target player|each (?:player|opponent)) mills/i.test(o) ||
+          /mill \d+/i.test(o) ||
+          /put.*(?:top|cards).*into.*graveyard/i.test(o)
+      },
+      { name: 'Mill Payoffs',
+        desc: 'Cards that reward milling — Bruvac, Duskmantle Guildmage, Sphinx\'s Tutelage',
+        weight: 2,
+        test: (o, t, sd) =>
+          /whenever.*(?:card|cards?).*(?:put into|enters?).*(?:a |an )?(?:opponent's )?graveyard/i.test(o) ||
+          /whenever.*mills/i.test(o) ||
+          /opponent.*(?:has no|doesn't have).*(?:cards? in|library)/i.test(o)
+      }
+    ]
+  },
+
+  // ── POISON / INFECT — commander deals poison or cares about poison counters ──
+  poisonInfect: {
+    detect: o => /infect|toxic|poisonous|poison counter|proliferate.*poison|whenever.*deals? combat damage.*poison/i.test(o),
+    roles: [
+      { name: 'Poison Delivery',
+        desc: 'Additional infect/toxic creatures to ensure consistent poison pressure — Blighted Agent, Phyrexian Crusader',
+        weight: 3,
+        test: (o, t, sd) =>
+          /infect|toxic \d+|poisonous/i.test(o) ||
+          (/creature/i.test(t) && /deathtouch/i.test(o) && sd?.cmc <= 3)
+      },
+      { name: 'Proliferate Package',
+        desc: 'Proliferate effects to accelerate poison counters — Inexorable Tide, Karn\'s Bastion, Thrummingbird',
+        weight: 2,
+        test: (o, t, sd) =>
+          /proliferate/i.test(o) ||
+          /additional.*counter|for each.*counter|double.*counter/i.test(o)
+      },
+      { name: 'Evasion Suite',
+        desc: 'Unblockable, flying, and protection to ensure poison damage connects — Aqueous Form, Whispersilk Cloak',
+        weight: 2,
+        test: (o, t, sd) =>
+          /can't be blocked|unblockable|shadow(?![a-z])/i.test(o) ||
+          (/enchant.*creature|equipment/i.test(t) && /flying|fear|intimidate|menace|skulk/i.test(o))
+      }
+    ]
+  },
+
+  // ── CASCADE / FREECAST — commander cascades or casts spells for free ──
+  cascadeFreecast: {
+    detect: o => /\bcascade\b|discover \d+|without paying (?:its|their) mana cost.*(?:whenever|each|from)|exile.*(?:top|cards?).*(?:you may cast|play)/i.test(o),
+    roles: [
+      { name: 'Cascade Payloads',
+        desc: 'High-impact spells at key mana values to hit off cascade — stack the deck with powerful mid-cost spells',
+        weight: 3,
+        test: (o, t, sd) =>
+          /instant|sorcery/i.test(t) && sd?.cmc >= 3 && sd?.cmc <= 6 &&
+          (/draw|destroy|exile|create.*token|each opponent/i.test(o))
+      },
+      { name: 'Topdeck Control',
+        desc: 'Sensei\'s Divining Top, Scroll Rack, Brainstorm effects to control what cascade hits',
+        weight: 2,
+        test: (o, t, sd) =>
+          /look at the top|top of your library|scry|rearrange|put.*on top of.*library/i.test(o) ||
+          /(?:fateseal|surveil) \d+/i.test(o)
+      },
+      { name: 'Extra Cascades',
+        desc: 'Additional cascade or freecast effects to compound the value — Imoti, Maelstrom Nexus, Wild-Magic Sorcerer',
+        weight: 2,
+        test: (o, t, sd) =>
+          /\bcascade\b|discover \d+/i.test(o) ||
+          /without paying (?:its|their) mana cost/i.test(o) ||
+          /exile.*top.*(?:you may cast|play)/i.test(o)
+      }
+    ]
+  },
+
+  // ── MORPH / MANIFEST — commander cares about face-down creatures ──
+  morphManifest: {
+    detect: o => /morph|manifest|megamorph|disguise|cloak|face.?down|turned? face up|whenever.*face.?down/i.test(o),
+    roles: [
+      { name: 'Morph Creatures',
+        desc: 'Creatures with morph/disguise that benefit from cost reduction and face-down synergies — Den Protector, Bane of the Living',
+        weight: 3,
+        test: (o, t, sd) =>
+          /morph|megamorph|disguise/i.test(o) && /creature/i.test(t)
+      },
+      { name: 'Face-Down Payoffs',
+        desc: 'Effects that reward face-down creatures entering or flipping — Trail of Mystery, Ixidor',
+        weight: 2,
+        test: (o, t, sd) =>
+          /whenever.*(?:face.?down|morph|manifest|turned? face up)/i.test(o) ||
+          /face.?down.*(?:creature|permanent)/i.test(o) ||
+          /manifest|cloak/i.test(o)
+      }
+    ]
+  },
+
+  // ── CYCLING MATTERS — commander triggers on cycling or rewards cycling ──
+  cyclingMatters: {
+    detect: o => /whenever.*(?:you )?cycle|cycling (?:trigger|cost|ability)|whenever a card is cycled|pay.*cycling cost|cycling \{/i.test(o),
+    roles: [
+      { name: 'Cycling Cards',
+        desc: 'Cards with cycling to trigger the commander — Decree cycle, Street Wraith, Shark Typhoon',
+        weight: 3,
+        test: (o, t, sd) =>
+          /cycling \{|cycling—|typecycling|basic landcycling|plainscycling|islandcycling|swampcycling|mountaincycling|forestcycling/i.test(o) ||
+          sd?.keywords?.some(k => /cycling/i.test(k))
+      },
+      { name: 'Cycling Payoffs',
+        desc: 'Additional rewards for cycling — Astral Drift, Drake Haven, Fluctuator',
+        weight: 2,
+        test: (o, t, sd) =>
+          /whenever.*(?:you )?cycle|whenever.*(?:card|is) cycled/i.test(o) ||
+          /cycling.*(?:cost|costs?).*less/i.test(o)
+      }
+    ]
+  },
+
+  // ── EQUIPMENT MATTERS — commander synergizes with equipment ──
+  equipmentMatters: {
+    detect: o => /(?:equipped creature|whenever.*equip|equipment.*(?:you control|enters|attach)|attach.*equipment|equip \{|reconfigure)/i.test(o) && !/equip only/i.test(o),
+    roles: [
+      { name: 'Premium Equipment',
+        desc: 'High-impact equipment to maximize equip synergies — Sword cycle, Shadowspear, Batterbone',
+        weight: 3,
+        test: (o, t, sd) =>
+          /equipment/i.test(t) ||
+          /reconfigure/i.test(o) ||
+          (/artifact/i.test(t) && /equip|equipped creature|attach/i.test(o))
+      },
+      { name: 'Equip Acceleration',
+        desc: 'Free equip, auto-attach, and equipment tutors — Sigarda\'s Aid, Puresteel Paladin, Stoneforge Mystic',
+        weight: 2,
+        test: (o, t, sd) =>
+          /equip.*cost.*(?:less|\{0\}|reduced|free)/i.test(o) ||
+          /attach.*equipment|equipment.*enters.*attach|search.*library.*equipment/i.test(o) ||
+          /whenever.*equipment.*enters|whenever you (?:cast|play).*equipment/i.test(o) ||
+          (/creature/i.test(t) && /equipment.*you control/i.test(o))
+      }
+    ]
+  },
+
+  // ── VOLTRON / ATTACKS ALONE — commander rewards single-creature combat ──
+  voltronSolo: {
+    detect: o => /attacks alone|exalted|is the only.*(?:attack|creature)|whenever enchanted creature|equipped creature.*(?:deals|gets|has)|aura.*you control/i.test(o),
+    roles: [
+      { name: 'Aura Package',
+        desc: 'Powerful auras for stacking on the commander — Ethereal Armor, All That Glitters, Ancestral Mask',
+        weight: 3,
+        test: (o, t, sd) =>
+          /aura/i.test(t) && /enchant creature/i.test(o) &&
+          (/\+\d+\/\+\d+|power|toughness|flying|trample|double strike|hexproof|lifelink|first strike|indestructible/i.test(o))
+      },
+      { name: 'Voltron Protection',
+        desc: 'Totem armor, hexproof, and indestructible auras to protect the investment — Shielded by Faith, Hyena Umbra',
+        weight: 2,
+        test: (o, t, sd) =>
+          (/aura/i.test(t) && /totem armor|hexproof|indestructible|shroud|protection/i.test(o)) ||
+          (/creature/i.test(t) && /exalted/i.test(o))
+      }
+    ]
+  },
+
+  // ── DEATH TRIGGER — commander cares about creatures dying (not sacrifice-specific) ──
+  deathTrigger: {
+    detect: o => /whenever (?:a |another )?(?:creature|nontoken).*(?:you control )?dies|morbid|(?:if|when).*creature.*died this turn|creatures? dying (?:cause|trigger)/i.test(o),
+    roles: [
+      { name: 'Dying Bodies',
+        desc: 'Creatures that die easily or repeatedly — tokens, self-sacrificing creatures, recursive threats',
+        weight: 3,
+        test: (o, t, sd) =>
+          /create.*(?:creature )?token/i.test(o) || /afterlife|decayed/i.test(o) ||
+          /undying|persist|encore/i.test(o) ||
+          (/creature/i.test(t) && sd?.cmc <= 2) ||
+          /sacrifice.*(?:this|a |another)/i.test(o)
+      },
+      { name: 'Death Payoffs',
+        desc: 'Additional death trigger rewards to compound value — Grave Pact, Dictate of Erebos, Skullclamp',
+        weight: 2,
+        test: (o, t, sd) =>
+          /whenever.*(?:a |another )?creature.*dies/i.test(o) ||
+          /whenever.*creature.*(?:put into|enters?).*(?:a )?graveyard from the battlefield/i.test(o) ||
+          /morbid/i.test(o)
+      }
+    ]
+  },
+
+  // ── CLONE / CREATURE COPY — commander copies or clones creatures ──
+  clonesCopy: {
+    detect: o => /copy of (?:target|a|that) creature|(?:create|become|enters?).*(?:a )?copy of|clone|copies of.*creature/i.test(o),
+    roles: [
+      { name: 'Clone Targets',
+        desc: 'High-value creatures worth copying — ETB creatures, legendary creatures with powerful static effects',
+        weight: 3,
+        test: (o, t, sd) =>
+          (/creature/i.test(t) && sd?.cmc >= 4 &&
+           /when .* enters|draw|destroy|exile|create.*token|each opponent/i.test(o))
+      },
+      { name: 'Copy Effects',
+        desc: 'Additional clone and copy effects — Sakashima, Spark Double, Phantasmal Image',
+        weight: 2,
+        test: (o, t, sd) =>
+          /copy of.*(?:target|a|another).*creature/i.test(o) ||
+          /becomes? a copy|enter.*as a copy|create.*token.*(?:that's|that is) a copy/i.test(o)
+      }
+    ]
+  },
+
+  // ── FLASH MATTERS — commander grants or rewards flash timing ──
+  flashMoment: {
+    detect: o => /(?:you may cast|cast).*(?:creature|spell|permanent).*(?:as though|any time|at instant)|(?:flash|whenever.*cast.*(?:opponent's|during|not your) turn)/i.test(o),
+    roles: [
+      { name: 'Instant-Speed Threats',
+        desc: 'Creatures with flash or ETBs that double as instant-speed interaction — Snapcaster Mage, Restoration Angel',
+        weight: 3,
+        test: (o, t, sd) =>
+          (/creature/i.test(t) && /flash/i.test(o)) ||
+          (/creature/i.test(t) && /when .* enters.*(?:exile|destroy|return|counter|draw)/i.test(o))
+      },
+      { name: 'Flash Enablers',
+        desc: 'Additional flash-granting effects — Leyline of Anticipation, Vedalken Orrery, Teferi Mage of Zhalfir',
+        weight: 2,
+        test: (o, t, sd) =>
+          /you may cast.*(?:as though|any time|at instant)|flash.*to all|all.*(?:spells|cards).*(?:have |gain )flash/i.test(o)
+      }
+    ]
+  },
+
+  // ── ARTIFACT SYNERGY — commander cares about artifacts entering/being controlled ──
+  artifactSynergy: {
+    detect: o => /whenever.*artifact.*(?:enters|cast)|artifact(?:s)? you control|affinity for artifacts|improvise|for each artifact/i.test(o),
+    roles: [
+      { name: 'Artifact Mass',
+        desc: 'Cheap artifacts and artifact token generators — Treasure, Clue, Food, and Blood token makers, mana rocks',
+        weight: 3,
+        test: (o, t, sd) =>
+          (/artifact/i.test(t) && sd?.cmc <= 3) ||
+          /create.*(?:treasure|clue|food|blood|artifact) token/i.test(o) ||
+          /improvise|affinity/i.test(o)
+      },
+      { name: 'Artifact Payoffs',
+        desc: 'Rewards for controlling or casting artifacts — Cranial Plating, Masterful Replication, Shimmer Dragon',
+        weight: 2,
+        test: (o, t, sd) =>
+          /whenever.*artifact.*(?:enters|is put|cast)/i.test(o) ||
+          /for each artifact you control/i.test(o) ||
+          /artifacts? you control.*(?:get|\+|have|gain)/i.test(o)
+      }
+    ]
   }
 };
 
@@ -1999,7 +2309,8 @@ function deriveEngineName(signalIds) {
   // Token consumption combos (Baylen-style: taps tokens as fuel)
   if (signalIds.includes('tokenConsumption') && signalIds.includes('countersSynergy')) return 'Token / Counters Engine';
   if (signalIds.includes('tokenConsumption')) return 'Token Consumption Engine';
-  // ETB doubling (Panharmonicon / Elesh Norn)
+  // ETB / Death doubling (Panharmonicon / Elesh Norn / Teysa Karlov)
+  if (signalIds.includes('etbDoubling') && signalIds.includes('deathTrigger')) return 'Death Doubling Engine';
   if (signalIds.includes('etbDoubling') && signalIds.includes('tokenCreation')) return 'ETB / Token Doubling Engine';
   if (signalIds.includes('etbDoubling')) return 'ETB Doubling Engine';
   // Permanent animation (Bello-style: artifacts/enchantments become creatures)
@@ -2060,6 +2371,45 @@ function deriveEngineName(signalIds) {
   // Exile matters (Ketramose-style: exile threshold)
   if (signalIds.includes('exileMatters') && signalIds.includes('combatDamage')) return 'Exile Assault Engine';
   if (signalIds.includes('exileMatters')) return 'Exile Matters Engine';
+  // Self-flicker (Norin-style: exile self, return, trigger ETBs)
+  if (signalIds.includes('selfFlicker')) return 'Self-Flicker Engine';
+  // Punisher (Kaervek-style: opponents take damage for actions)
+  if (signalIds.includes('punisher') && signalIds.includes('damageAmp')) return 'Group Slug Engine';
+  if (signalIds.includes('punisher')) return 'Punisher Engine';
+  // Mill engine
+  if (signalIds.includes('millEngine') && signalIds.includes('tribalSynergy')) return 'Mill Tribal Engine';
+  if (signalIds.includes('millEngine')) return 'Mill Engine';
+  // Poison / Infect
+  if (signalIds.includes('poisonInfect') && signalIds.includes('countersSynergy')) return 'Infect / Proliferate Engine';
+  if (signalIds.includes('poisonInfect')) return 'Infect Engine';
+  // Cascade / Freecast
+  if (signalIds.includes('cascadeFreecast') && signalIds.includes('topdeckMatters')) return 'Cascade / Topdeck Engine';
+  if (signalIds.includes('cascadeFreecast')) return 'Cascade Engine';
+  // Morph / Face-down
+  if (signalIds.includes('morphManifest') && signalIds.includes('costReduction')) return 'Morph Engine';
+  if (signalIds.includes('morphManifest')) return 'Morph / Manifest Engine';
+  // Cycling
+  if (signalIds.includes('cyclingMatters') && signalIds.includes('tokenCreation')) return 'Cycling Token Engine';
+  if (signalIds.includes('cyclingMatters')) return 'Cycling Engine';
+  // Equipment / Voltron combos
+  if (signalIds.includes('equipmentMatters') && signalIds.includes('voltronSolo')) return 'Equipment Voltron Engine';
+  if (signalIds.includes('equipmentMatters') && signalIds.includes('combatDamage')) return 'Equipment Assault Engine';
+  if (signalIds.includes('equipmentMatters')) return 'Equipment Engine';
+  if (signalIds.includes('voltronSolo') && signalIds.includes('enchantressTrigger')) return 'Enchantress Voltron Engine';
+  if (signalIds.includes('voltronSolo')) return 'Voltron Engine';
+  // Death triggers (distinct from sacrifice — cares about ANY death)
+  if (signalIds.includes('deathTrigger') && signalIds.includes('tokenCreation')) return 'Death / Token Engine';
+  if (signalIds.includes('deathTrigger')) return 'Death Trigger Engine';
+  // Clone / Copy
+  if (signalIds.includes('clonesCopy') && signalIds.includes('etbTrigger')) return 'Clone / ETB Engine';
+  if (signalIds.includes('clonesCopy')) return 'Clone Engine';
+  // Flash Matters
+  if (signalIds.includes('flashMoment') && signalIds.includes('spellcastTrigger')) return 'Flash Spellslinger Engine';
+  if (signalIds.includes('flashMoment')) return 'Flash Engine';
+  // Artifact Synergy
+  if (signalIds.includes('artifactSynergy') && signalIds.includes('tokenCreation')) return 'Artifact Token Engine';
+  if (signalIds.includes('artifactSynergy') && signalIds.includes('sacrifice')) return 'Artifact Aristocrats Engine';
+  if (signalIds.includes('artifactSynergy')) return 'Artifact Engine';
   // Remaining singles
   if (signalIds.includes('lifegainPayoff')) return 'Lifegain Engine';
   if (signalIds.includes('combatDamage') && signalIds.includes('exilePlay')) return 'Combat Exile Engine';
