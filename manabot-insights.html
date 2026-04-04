@@ -1695,7 +1695,7 @@ const CMD_SIGNALS = {
 
   // ── TRIBAL — commander cares about creature types ──
   tribalSynergy: {
-    detect: (o, kw, t) => /all .*(creatures you control|elves|goblins|zombies|vampires|merfolk|warriors|wizards|knights|humans|dragons|hydras|dinosaurs|soldiers|spirits|angels|demons|beasts|ninjas?|rogues?|clerics?|shamans?|orcs?|armou?r?ies?) get|other .* get \+|choose a creature type|whenever (?:a|an) (?:ninja|elf|goblin|zombie|vampire|merfolk|warrior|wizard|knight|human|dragon|hydra|dinosaur|soldier|spirit|angel|demon|beast|rogue|cleric|shaman|pirate|cat|dog|rat|sliver|ally|elemental|faerie|bird|orc|army|rabbit|raccoon|advisor|insect|spider|wurm|ooze|fungus|saproling|squirrel|bear|wolf|werewolf|horror|phyrexian).*(?:you control|deals|enters|dies|attacks)/i.test(o),
+    detect: (o, kw, t) => /all .*(creatures you control|elves|goblins|zombies|vampires|merfolk|warriors|wizards|knights|humans|dragons|hydras|dinosaurs|soldiers|spirits|angels|demons|beasts|ninjas?|rogues?|clerics?|shamans?|orcs?|armou?r?ies?) get|other .* get \+|choose a creature type|whenever (?:a|an) (?:ninja|elf|goblin|zombie|vampire|merfolk|warrior|wizard|knight|human|dragon|hydra|dinosaur|soldier|spirit|angel|demon|beast|rogue|cleric|shaman|pirate|cat|dog|rat|sliver|ally|elemental|faerie|bird|orc|army|rabbit|raccoon|advisor|insect|spider|wurm|ooze|fungus|saproling|squirrel|bear|wolf|werewolf|horror|phyrexian).*(?:you control|deals|enters|dies|attacks)|(?:tap|untap).*(?:elves|goblins|zombies|vampires|merfolk|warriors|wizards|knights|humans|dragons|soldiers|spirits|angels|demons|slivers?|allies|elementals|faeries|pirates?|cats?|dogs?|rats?|clerics?|shamans?|rogues?|ninjas?).*you control|create.*(?:elf|goblin|zombie|vampire|merfolk|warrior|wizard|knight|human|dragon|soldier|spirit|angel|demon|beast|sliver|ally|elemental|faerie|pirate|cat|dog|rat|cleric|shaman|rogue|ninja|saproling|squirrel|insect|spider).*(?:creature )?token/i.test(o),
     roles: [
       { name: 'Tribal Lords',
         desc: 'Type-specific lords and anthems for the tribe',
@@ -1770,7 +1770,7 @@ const CMD_SIGNALS = {
 
   // ── TOKEN CONSUMPTION — commander taps/sacrifices tokens as a resource ──
   tokenConsumption: {
-    detect: o => /tap.*untapped.*token|tap.*token.*you control/i.test(o),
+    detect: o => /tap.*untapped.*(?:token|creature|elves|goblins|zombies|vampires|merfolk|warriors|wizards|knights|humans|soldiers|spirits|slivers?).*you control|tap.*(?:token|creature).*you control/i.test(o),
     roles: [
       { name: 'Token Generation',
         desc: 'Cards that reliably produce tokens to fuel the commander\'s activated abilities — the engine needs bodies',
@@ -2336,6 +2336,7 @@ function deriveEngineName(signalIds) {
   // Prioritized combos first, then individual signals
   // Token consumption combos (Baylen-style: taps tokens as fuel)
   if (signalIds.includes('tokenConsumption') && signalIds.includes('countersSynergy')) return 'Token / Counters Engine';
+  if (signalIds.includes('tokenConsumption') && signalIds.includes('tribalSynergy')) return 'Tribal Token Engine';
   if (signalIds.includes('tokenConsumption')) return 'Token Consumption Engine';
   // ETB / Death doubling (Panharmonicon / Elesh Norn / Teysa Karlov)
   if (signalIds.includes('etbDoubling') && signalIds.includes('deathTrigger')) return 'Death Doubling Engine';
@@ -2378,6 +2379,10 @@ function deriveEngineName(signalIds) {
   if (signalIds.includes('etbTrigger')) return 'ETB / Blink Engine';
   // Library cheat — put creatures from library onto battlefield
   if (signalIds.includes('libraryCheat')) return 'Library Assault Engine';
+  // Tribal + token + combat (Lathril-style: combat → tribal tokens → tap tribe)
+  if (signalIds.includes('tribalSynergy') && signalIds.includes('tokenCreation') && signalIds.includes('combatDamage')) return 'Tribal Token Assault Engine';
+  if (signalIds.includes('tribalSynergy') && signalIds.includes('tokenCreation')) return 'Tribal Token Engine';
+  if (signalIds.includes('tribalSynergy') && signalIds.includes('combatDamage')) return 'Tribal Assault Engine';
   // Token assault (tokens + combat damage, e.g. Sauron amass → combat → trigger)
   if (signalIds.includes('tokenCreation') && signalIds.includes('combatDamage')) return 'Token Assault Engine';
   // Graveyard
@@ -3125,6 +3130,12 @@ function renderImport() {
         };
         STATE.categories = {};
         STATE.fingers = {};
+        STATE.userEdited = {};
+        STATE.fingerEdited = {};
+        STATE.feedback = {};
+        STATE.rawText = '';
+        STATE.fetchErrors = [];
+        STATE.cmdrCandidates = null;
         STATE._detectedEngine = null;
         STATE.buildPlanMode = true;
 
@@ -4427,6 +4438,181 @@ function makeFeedbackBox(stepName, prompt) {
 // ============================================================
 // ADD CARD TO DECK — Fetch from Scryfall, auto-categorize, guardrail check
 // ============================================================
+// ============================================================
+// AI FILL 99 — Generate a starting deck from Scryfall based on Character Sheet
+// ============================================================
+async function aiFill99(statusEl) {
+  const cs = STATE.characterSheet;
+  const cmdr = STATE.parsedCards.find(c => c.isCommander);
+  const cmdrSD = cmdr ? STATE.scryfallData[cmdr.name] : null;
+  if (!cmdrSD) { statusEl.innerHTML = '<span class="text-red-400 text-sm">No commander loaded.</span>'; return; }
+
+  const ci = (cmdrSD.color_identity || []).join('').toLowerCase() || 'c';
+  const ciFilter = `id<=${ci} f:commander`;
+  const profile = getProfile();
+
+  // Calculate how many cards we need per category
+  const existing = STATE.parsedCards.filter(c => !c.isCommander).length;
+  const needed = 99 - existing;
+  if (needed <= 0) {
+    statusEl.innerHTML = '<span class="text-mtg-gold text-sm">Deck already has 99+ cards.</span>';
+    return;
+  }
+
+  // Target counts (use midpoint of bracket ranges)
+  const rampTarget = Math.round((profile.ramp[0] + profile.ramp[1]) / 2);
+  const velocityTarget = Math.round((profile.velocity[0] + profile.velocity[1]) / 2);
+  const interactionTarget = Math.round((profile.interaction[0] + profile.interaction[1]) / 2);
+  const wipeTarget = Math.round((profile.wipe[0] + profile.wipe[1]) / 2);
+  const landTarget = Math.round((profile.lands[0] + profile.lands[1]) / 2);
+
+  // SA targets — split remaining slots among named SAs
+  const namedSAs = cs.saNames.filter(n => n && n.trim());
+  const coreSlots = rampTarget + velocityTarget + interactionTarget + wipeTarget + landTarget;
+  const saSlots = Math.max(0, 99 - coreSlots);
+  const perSA = namedSAs.length > 0 ? Math.floor(saSlots / namedSAs.length) : 0;
+
+  // Build Scryfall queries per category
+  // Commander signal keywords for SA queries
+  const cmdrOracle = (cmdrSD.oracle_text || '').toLowerCase();
+  const saQueries = [];
+  for (let i = 0; i < 5; i++) {
+    if (!cs.saNames[i]) continue;
+    const saDesc = (cs.sa[i] || '').toLowerCase();
+    const saName = cs.saNames[i].toLowerCase();
+    // Build a query from the SA description keywords
+    // Order matters: more specific matchers first to avoid false positives
+    let oracleTerms = [];
+    if (/lifegain|life.*gain|lifelink|extort|soul.*warden|drain/i.test(saDesc)) oracleTerms.push('(o:"gain" o:"life" OR o:"lifelink" OR o:"extort")');
+    else if (/anthem|lord|buff|creatures.*get \+|creatures you control get/i.test(saDesc)) oracleTerms.push('(o:"creatures you control get" OR o:"other" o:"get +")');
+    else if (/(?:create|generate|produce).*token|token.*(?:factory|generat|creat|doubl|multipli)/i.test(saDesc)) oracleTerms.push('o:"create" o:"token"');
+    else if (/sacrifice|aristocrat|death/i.test(saDesc)) oracleTerms.push('o:"sacrifice"');
+    else if (/counter|\+1|proliferate/i.test(saDesc)) oracleTerms.push('(o:"+1/+1 counter" OR o:"proliferate")');
+    else if (/graveyard|reanimate|recursion/i.test(saDesc)) oracleTerms.push('(o:"from your graveyard" OR o:"return" o:"graveyard")');
+    else if (/draw|card advantage|velocity/i.test(saDesc)) oracleTerms.push('o:"draw a card"');
+    else if (/protection|hexproof|indestructible|insurance/i.test(saDesc)) oracleTerms.push('(o:"hexproof" OR o:"indestructible" OR o:"shroud" OR o:"ward")');
+    else if (/enchant|aura|constellation/i.test(saDesc)) oracleTerms.push('t:enchantment');
+    else if (/artifact|equipment/i.test(saDesc)) oracleTerms.push('t:artifact');
+    else if (/landfall|land.*enter/i.test(saDesc)) oracleTerms.push('o:"landfall" OR o:"whenever a land"');
+    else if (/copy|clone/i.test(saDesc)) oracleTerms.push('o:"copy of" OR o:"clone"');
+    else if (/flash|instant/i.test(saDesc)) oracleTerms.push('o:"flash"');
+    else if (/combat|attack|power/i.test(saDesc)) oracleTerms.push('(o:"attacking" OR o:"combat damage")');
+    else if (/tribal|creature type|lord/i.test(saDesc)) {
+      // Try to detect a creature type from commander
+      const typeMatch = cmdrSD.type_line?.match(/— (.+)/);
+      if (typeMatch) {
+        const types = typeMatch[1].split(' ');
+        const mainType = types[types.length - 1]; // last type is usually the relevant one
+        oracleTerms.push(`(t:${mainType} OR o:"${mainType}")`);
+      } else {
+        oracleTerms.push('o:"creatures you control"');
+      }
+    } else if (/evasion|unblockable|flying|menace/i.test(saDesc)) oracleTerms.push('(o:"flying" OR o:"menace" OR o:"can\'t be blocked")');
+    else if (/ramp|mana/i.test(saDesc)) oracleTerms.push('o:"add" t:creature');
+    else if (/token/i.test(saDesc)) oracleTerms.push('o:"create" o:"token"');
+    else {
+      // Fallback: search for cards matching the SA name
+      oracleTerms.push(`o:"${cs.saNames[i].split(' ')[0].toLowerCase()}"`);
+    }
+    saQueries.push({ idx: i, name: cs.saNames[i], target: perSA, query: `${ciFilter} ${oracleTerms.join(' ')} -t:land` });
+  }
+
+  const categories = [
+    { cat: 'Ramp', target: rampTarget, query: `${ciFilter} (o:"add {" OR (o:"search your library" o:"land" o:"onto the battlefield") OR (t:artifact o:"add" cmc<=3)) -t:land -t:creature` },
+    { cat: 'Ramp-creatures', target: 0, mergeInto: 'Ramp', query: `${ciFilter} t:creature (o:"add {" OR (o:"search your library" (o:"forest" OR o:"land") o:"onto the battlefield")) cmc<=3` },
+    { cat: 'Velocity', target: velocityTarget, query: `${ciFilter} (o:"draw a card" OR o:"draw two" OR o:"draw cards") -t:land` },
+    { cat: 'Interaction', target: interactionTarget, query: `${ciFilter} (o:"destroy target" OR o:"exile target" OR o:"counter target" OR o:"return target") -t:land` },
+    { cat: 'Wipe', target: wipeTarget, query: `${ciFilter} (o:"destroy all" OR o:"exile all" OR o:"-X/-X" o:"each creature") -t:land` },
+    ...saQueries.map(sq => ({ cat: `SA-${sq.idx+1}`, target: sq.target, query: sq.query })),
+    { cat: 'Land', target: landTarget, query: `${ciFilter} t:land` }
+  ];
+
+  statusEl.innerHTML = '';
+  const progressBox = el('div', { className: 'p-4 rounded-lg border border-mtg-gold/30 bg-mtg-dark/50' });
+  const progressTitle = el('div', { className: 'text-sm font-semibold text-mtg-gold mb-2' }, ['Building your 99...']);
+  const progressLog = el('div', { className: 'text-xs text-mtg-dim space-y-1', style: 'max-height:200px; overflow-y:auto' });
+  progressBox.appendChild(progressTitle);
+  progressBox.appendChild(progressLog);
+  statusEl.appendChild(progressBox);
+
+  const addedNames = new Set(STATE.parsedCards.map(c => c.name.toLowerCase()));
+  let totalAdded = 0;
+
+  for (const catDef of categories) {
+    if (catDef.target <= 0 && !catDef.mergeInto) continue;
+    const effectiveTarget = catDef.mergeInto ? 4 : catDef.target; // bonus cards for merge categories
+    const catLabel = catDef.mergeInto || catDef.cat;
+
+    progressLog.appendChild(el('div', { className: 'text-mtg-gold' }, [`Searching ${catDisplayName(catLabel)}...`]));
+    progressLog.scrollTop = progressLog.scrollHeight;
+
+    try {
+      // Scryfall search with EDHREC rank ordering
+      const searchUrl = `https://api.scryfall.com/cards/search?q=${encodeURIComponent(catDef.query)}&order=edhrec&dir=asc&unique=cards`;
+      const resp = await fetch(searchUrl);
+      if (!resp.ok) {
+        progressLog.appendChild(el('div', { className: 'text-yellow-400' }, [`No results for ${catDisplayName(catLabel)} — skipping`]));
+        continue;
+      }
+      const data = await resp.json();
+      const cards = data.data || [];
+
+      let addedThisCat = 0;
+      for (const card of cards) {
+        if (addedThisCat >= effectiveTarget) break;
+        if (totalAdded >= needed) break;
+        const name = card.name;
+        if (addedNames.has(name.toLowerCase())) continue;
+        // Skip banned or restricted
+        if (card.legalities?.commander === 'banned') continue;
+
+        // Add to deck
+        STATE.scryfallData[name] = card;
+        STATE.parsedCards.push({ qty: 1, name, isCommander: false });
+        addedNames.add(name.toLowerCase());
+
+        // Auto-categorize
+        const autoCat = autoCategorize(name, false);
+        if (autoCat) {
+          STATE.categories[name] = autoCat;
+        }
+        // Override primary category to match what we searched for
+        if (!STATE.categories[name]) STATE.categories[name] = {};
+        const assignCat = catDef.mergeInto || catDef.cat;
+        if (assignCat !== 'Land' || isLandCard(name)) {
+          STATE.categories[name].primary = assignCat;
+        }
+
+        addedThisCat++;
+        totalAdded++;
+      }
+
+      progressLog.appendChild(el('div', {}, [`Added ${addedThisCat} ${catDisplayName(catLabel)} cards`]));
+
+      // Respect Scryfall rate limit (100ms between requests)
+      await new Promise(r => setTimeout(r, 120));
+    } catch (e) {
+      progressLog.appendChild(el('div', { className: 'text-red-400' }, [`Error searching ${catDisplayName(catLabel)}: ${e.message}`]));
+    }
+  }
+
+  // Run SA auto-assign for any uncategorized cards
+  autoAssignSACategories();
+
+  // Auto-score all fingers
+  getNonLandCards().forEach(c => {
+    STATE.fingers[c.name] = autoScoreFingers(c.name);
+  });
+
+  progressTitle.textContent = `Done! Added ${totalAdded} cards to your deck.`;
+  progressLog.appendChild(el('div', { className: 'text-green-400 font-semibold mt-2' }, [
+    `Your deck now has ${STATE.parsedCards.filter(c => !c.isCommander).length}/99 cards. Review the Five-Finger scores below — low scorers are your first cut candidates.`
+  ]));
+
+  // Re-render after a short delay so user can see the completion message
+  setTimeout(() => render(), 1500);
+}
+
 async function addCardToDeck(cardName, statusEl) {
   // Check if already in deck
   if (STATE.parsedCards.some(c => c.name.toLowerCase() === cardName.toLowerCase())) {
@@ -4619,6 +4805,33 @@ function renderCategorize() {
   searchRow.appendChild(searchInput);
   searchSection.appendChild(searchRow);
   searchSection.appendChild(searchResults);
+
+  // AI Fill 99 button — generate a full starting deck
+  if (deckTotal < 90) {
+    const aiFillSection = el('div', { className: 'mt-4 pt-4 border-t border-mtg-border/50' });
+    const aiFillRow = el('div', { className: 'flex items-center gap-3' });
+    const aiFillStatus = el('div', { className: 'ai-fill-status mt-3' });
+    const aiFillBtn = el('button', {
+      className: 'px-5 py-2.5 rounded-lg bg-mtg-gold text-mtg-dark font-semibold hover:bg-mtg-accent transition text-sm whitespace-nowrap',
+      onClick: async () => {
+        if (!confirm(`This will search Scryfall and add ~${99 - deckTotal} cards to fill your deck to 99. Cards are selected by EDHREC popularity within your commander's color identity and distributed across your categories. You can cut and replace afterward.\n\nContinue?`)) return;
+        aiFillBtn.disabled = true;
+        aiFillBtn.textContent = 'Building deck...';
+        await aiFill99(aiFillStatus);
+        aiFillBtn.disabled = false;
+        aiFillBtn.textContent = 'AI Fill 99';
+      }
+    }, ['AI Fill 99']);
+    const aiFillDesc = el('div', { className: 'flex-1 min-w-0' });
+    aiFillDesc.appendChild(el('div', { className: 'text-sm font-semibold text-white' }, ['Need a starting point?']));
+    aiFillDesc.appendChild(el('div', { className: 'text-xs text-mtg-dim' }, ['Auto-fill your deck to 99 cards using EDHREC-ranked cards in your colors, distributed across your category targets. Review the Five-Finger scores to find cut candidates.']));
+    aiFillRow.appendChild(aiFillBtn);
+    aiFillRow.appendChild(aiFillDesc);
+    aiFillSection.appendChild(aiFillRow);
+    aiFillSection.appendChild(aiFillStatus);
+    searchSection.appendChild(aiFillSection);
+  }
+
   container.appendChild(searchSection);
 
   // AI Auto-Fill banner
@@ -4671,10 +4884,7 @@ function renderCategorize() {
   });
   container.appendChild(legend);
 
-  // Ratio Dashboard — bracket-aware targets
-  const counts = calcCategoryCounts();
-  const profile = getProfile();
-  const landRec = recommendedLands();
+  // Ratio Dashboard — bracket-aware targets (reuse counts & profile from search section above)
   const targets = {
     Velocity: `${profile.velocity[0]}-${profile.velocity[1]}`,
     Ramp: `${profile.ramp[0]}-${profile.ramp[1]}`,
@@ -4743,11 +4953,21 @@ function renderCategorize() {
     if (!STATE.categories[c.name]) STATE.categories[c.name] = { primary: '', secondary: '' };
     const cat = STATE.categories[c.name];
 
+    // Compute Five-Finger score for display
+    if (!STATE.fingers[c.name]) STATE.fingers[c.name] = autoScoreFingers(c.name);
+    const fTotal = Object.values(STATE.fingers[c.name]).reduce((a,b) => a+b, 0);
+    const fColor = fTotal >= 4 ? '#22c55e' : fTotal >= 3 ? '#eab308' : fTotal >= 2 ? '#f97316' : '#ef4444';
+
     const row = el('div', { className: 'card-table-row grid grid-cols-12 gap-2 px-3 py-2 rounded card-hover border border-transparent items-center text-sm' });
 
-    // Name (with TCGplayer link)
-    const nameEl = el('div', { className: 'card-name col-span-4' });
+    // Name (with TCGplayer link) + Five-Finger badge
+    const nameEl = el('div', { className: 'card-name col-span-4 flex items-center gap-1.5' });
     nameEl.appendChild(cardNameEl(c.name, 'truncate'));
+    nameEl.appendChild(el('span', {
+      className: 'flex-shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded-full',
+      style: `background:${fColor}18; color:${fColor}; border:1px solid ${fColor}33`,
+      title: `Five-Finger: CS:${STATE.fingers[c.name].cs} DC:${STATE.fingers[c.name].dc} WC:${STATE.fingers[c.name].wc} IV:${STATE.fingers[c.name].iv} TF:${STATE.fingers[c.name].tf}`
+    }, [fTotal.toFixed(1)]));
     row.appendChild(nameEl);
 
     // MV
@@ -4850,6 +5070,8 @@ function renderCategorize() {
           if (!confirm(`Remove ${c.name} from your deck?`)) return;
           STATE.parsedCards = STATE.parsedCards.filter(p => p.name !== c.name);
           delete STATE.categories[c.name];
+          delete STATE.fingers[c.name];
+          delete STATE.userEdited[c.name];
           render();
         }
       }, ['×']);
