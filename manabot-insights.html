@@ -366,6 +366,7 @@ const STATE = {
   userEdited: {},        // {cardName: true} — cards manually edited by user, skip auto-assign
   fingerEdited: {},      // {cardName: true} — cards with manually edited finger scores
   manuallyPlaced: new Set(), // Cards placed via inline slot search, skip re-distributing in populateGridFromDeck
+  removedFromGrid: new Set(), // Cards removed via X button — don't re-add on render
   grid: {},              // {cat: {engine: [[],[],[]], core: [[],[],[]], heavy: [[],[],[]]}}
   gridSlots: {},         // {cat: {engine: [n,n,n], core: [n,n,n], heavy: [n,n,n]}} — target slot counts
 };
@@ -384,6 +385,7 @@ function resetAudit() {
   STATE.userEdited = {};
   STATE.fingerEdited = {};
   STATE.manuallyPlaced = new Set();
+  STATE.removedFromGrid = new Set();
   STATE.grid = {};
   STATE.gridSlots = {};
   STATE._detectedRoles = [];
@@ -717,20 +719,38 @@ function allocateGridSlots() {
 }
 
 function populateGridFromDeck() {
+  // Preserve manually placed cards' positions before clearing
+  const manualPositions = new Map(); // cardName -> {cat, tier, deckIdx}
+  Object.keys(STATE.grid).forEach(cat => {
+    ['engine', 'core', 'heavy'].forEach(tier => {
+      [0, 1, 2].forEach(d => {
+        (STATE.grid[cat][tier][d] || []).forEach(cardName => {
+          if (STATE.manuallyPlaced.has(cardName)) {
+            manualPositions.set(cardName, { cat, tier, deckIdx: d });
+          }
+        });
+      });
+    });
+  });
+
   // Clear grid arrays but keep structure
   Object.keys(STATE.grid).forEach(cat => {
     STATE.grid[cat] = { engine: [[], [], []], core: [[], [], []], heavy: [[], [], []] };
   });
 
-  const placed = new Set();
+  // Restore manually placed cards first
+  manualPositions.forEach(({ cat, tier, deckIdx }, cardName) => {
+    if (STATE.grid[cat]) {
+      STATE.grid[cat][tier][deckIdx].push(cardName);
+    }
+  });
+
+  const placed = new Set(manualPositions.keys());
   let globalOffset = 0;
   getNonLandCards().forEach(c => {
     if (placed.has(c.name)) return;
-    // Skip cards that were manually placed via inline search
-    if (STATE.manuallyPlaced.has(c.name)) {
-      placed.add(c.name);
-      return;
-    }
+    // Skip cards removed via the X button
+    if (STATE.removedFromGrid.has(c.name)) return;
     const cat = STATE.categories[c.name]?.primary;
     if (!cat || cat === 'Land' || !STATE.grid[cat]) return;
 
@@ -907,10 +927,17 @@ function renderThreeDeckGrid() {
 
       // Deck A, B, C cells
       const deckLabels = ['Deck A', 'Deck B', 'Deck C'];
+      const deckColors = ['#60a5fa', '#34d399', '#f472b6'];
       for (let d = 0; d < 3; d++) {
         const maxSlots = slots[t.key][d];
         const cards = data[t.key][d] || [];
-        const cell = el('div', { className: 'deck-grid-cell space-y-0.5', 'data-deck-label': `${deckLabels[d]} · ${t.label}` });
+        const cell = el('div', { className: 'deck-grid-cell space-y-0.5 rounded-md p-1', 'data-deck-label': `${deckLabels[d]} · ${t.label}`, style: `border-left: 2px solid ${deckColors[d]}20` });
+        // Per-cell tier label (visible on all screen sizes)
+        cell.appendChild(el('div', { className: 'text-[9px] font-semibold mb-0.5 flex items-center gap-1' }, [
+          el('span', { style: `color:${deckColors[d]}` }, [deckLabels[d]]),
+          el('span', { className: 'text-mtg-dim' }, [`· ${t.label}`]),
+          el('span', { className: `${cards.length >= maxSlots && maxSlots > 0 ? 'text-green-400' : 'text-mtg-dim'}` }, [`${cards.length}/${maxSlots}`])
+        ]));
 
         // Render filled slots
         cards.forEach(cardName => {
@@ -925,10 +952,16 @@ function renderThreeDeckGrid() {
           rightSide.appendChild(el('span', { className: 'text-[10px] font-bold px-1 rounded', style: `background:${t.color}33; color:${t.color}` }, [String(mv)]));
           rightSide.appendChild(el('button', {
             className: 'text-mtg-dim hover:text-red-400 text-xs transition',
-            onClick: () => {
+            onClick: (e) => {
+              e.stopPropagation();
               const idx = STATE.grid[cat][t.key][d].indexOf(cardName);
               if (idx >= 0) STATE.grid[cat][t.key][d].splice(idx, 1);
               STATE.manuallyPlaced.delete(cardName);
+              STATE.removedFromGrid.add(cardName);
+              // Also remove from parsedCards so it doesn't count toward totals
+              STATE.parsedCards = STATE.parsedCards.filter(c => c.name !== cardName);
+              delete STATE.categories[cardName];
+              delete STATE.fingers[cardName];
               render();
             }
           }, ['×']));
@@ -5061,6 +5094,8 @@ async function aiFill99(statusEl) {
   const ci = (cmdrSD.color_identity || []).join('').toLowerCase() || 'c';
   const ciFilter = `id<=${ci} f:commander`;
   const profile = getProfile();
+  const bracket = STATE.characterSheet.bracket || '3';
+  const cmdrMV = cmdrSD.cmc || 4;
 
   // Calculate how many cards we need per category
   const existing = STATE.parsedCards.filter(c => !c.isCommander).length;
@@ -5070,89 +5105,149 @@ async function aiFill99(statusEl) {
     return;
   }
 
-  // Target counts (use midpoint of bracket ranges)
-  const rampTarget = Math.round((profile.ramp[0] + profile.ramp[1]) / 2);
-  const velocityTarget = Math.round((profile.velocity[0] + profile.velocity[1]) / 2);
-  const interactionTarget = Math.round((profile.interaction[0] + profile.interaction[1]) / 2);
-  const wipeTarget = Math.round((profile.wipe[0] + profile.wipe[1]) / 2);
-  const landTarget = Math.round((profile.lands[0] + profile.lands[1]) / 2);
+  // ── Target counts — use LOW end of ranges for Holy Trinity to maximize SA slots ──
+  // SAs are the deck's identity; core categories should be lean, not bloated
+  const rampTarget = profile.ramp[0];
+  const velocityTarget = profile.velocity[0];
+  const interactionTarget = profile.interaction[0];
+  const wipeTarget = profile.wipe[0];
+  const landTarget = Math.round((profile.lands[0] + profile.lands[1]) / 2); // lands stay at midpoint for consistency
 
-  // SA targets — split remaining slots among named SAs
+  // SA targets — minimum 7 per SA, split remaining slots
   const namedSAs = cs.saNames.filter(n => n && n.trim());
   const coreSlots = rampTarget + velocityTarget + interactionTarget + wipeTarget + landTarget;
   const saSlots = Math.max(0, 99 - coreSlots);
-  const perSA = namedSAs.length > 0 ? Math.floor(saSlots / namedSAs.length) : 0;
+  const calcPerSA = namedSAs.length > 0 ? Math.floor(saSlots / namedSAs.length) : 0;
+  const perSA = Math.max(7, calcPerSA); // Never less than 7 per SA
 
-  // Build Scryfall queries per category
-  // Commander signal keywords for SA queries
-  const cmdrOracle = (cmdrSD.oracle_text || '').toLowerCase();
-  const saQueries = [];
-  for (let i = 0; i < 5; i++) {
-    if (!cs.saNames[i]) continue;
-    const saDesc = (cs.sa[i] || '').toLowerCase();
-    const saName = cs.saNames[i].toLowerCase();
-    // Build a query from the SA description keywords
-    // Order matters: more specific matchers first to avoid false positives
-    let oracleTerms = [];
-    if (/explosive.*lifegain|big.*life|chunk.*life|beacon|massive.*gain/i.test(saDesc) || /explosive lifegain/i.test(saName)) oracleTerms.push('(o:"gain" o:"life" o:"equal" OR o:"double your life" OR o:"life total becomes" OR (o:"lifelink" t:creature pow>=4))');
-    else if (/life.*doubl|doubl.*life|rhox|boon.*reflect|gain.*twice|plus 1 instead/i.test(saDesc) || /life doubler/i.test(saName)) oracleTerms.push('(o:"if you would gain life" OR o:"double" o:"life" OR o:"gain" o:"twice" OR o:"additional life")');
-    else if (/life.*track|life.*protect|prevent.*damage|worship|fog|can't lose life/i.test(saDesc) || /life tracking/i.test(saName)) oracleTerms.push('(o:"prevent all" o:"damage" OR o:"can\'t lose life" OR o:"life total can\'t" OR o:"fog")');
-    else if (/lifegain|life.*gain|lifelink|extort|soul.*warden|drain/i.test(saDesc) || /lifegain trigger/i.test(saName)) oracleTerms.push('(o:"gain" o:"life" OR o:"lifelink" OR o:"extort")');
-    else if (/anthem|lord|buff|creatures.*get \+|creatures you control get/i.test(saDesc)) oracleTerms.push('(o:"creatures you control get" OR o:"other" o:"get +")');
-    else if (/(?:create|generate|produce).*token|token.*(?:factory|generat|creat|doubl|multipli)/i.test(saDesc)) oracleTerms.push('o:"create" o:"token"');
-    else if (/sacrifice|aristocrat|death/i.test(saDesc)) oracleTerms.push('o:"sacrifice"');
-    else if (/counter|\+1|proliferate/i.test(saDesc)) oracleTerms.push('(o:"+1/+1 counter" OR o:"proliferate")');
-    else if (/graveyard|reanimate|recursion/i.test(saDesc)) oracleTerms.push('(o:"from your graveyard" OR o:"return" o:"graveyard")');
-    else if (/draw|card advantage|velocity/i.test(saDesc)) oracleTerms.push('o:"draw a card"');
-    else if (/protection|hexproof|indestructible|insurance/i.test(saDesc)) oracleTerms.push('(o:"hexproof" OR o:"indestructible" OR o:"shroud" OR o:"ward")');
-    else if (/enchant|aura|constellation/i.test(saDesc)) oracleTerms.push('t:enchantment');
-    else if (/artifact|equipment/i.test(saDesc)) oracleTerms.push('t:artifact');
-    else if (/landfall|land.*enter/i.test(saDesc)) oracleTerms.push('o:"landfall" OR o:"whenever a land"');
-    else if (/copy|clone/i.test(saDesc)) oracleTerms.push('o:"copy of" OR o:"clone"');
-    else if (/flash|instant/i.test(saDesc)) oracleTerms.push('o:"flash"');
-    else if (/combat|attack|power/i.test(saDesc)) oracleTerms.push('(o:"attacking" OR o:"combat damage")');
-    else if (/tribal|creature type|lord/i.test(saDesc)) {
-      // Try to detect a creature type from commander
+  // ── Helper: Scryfall fetch with rate limiting and fallback ──
+  const scryDelay = () => new Promise(r => setTimeout(r, 120));
+  async function scrySearch(query, order = 'edhrec') {
+    const url = `https://api.scryfall.com/cards/search?q=${encodeURIComponent(query)}&order=${order}&unique=cards&page=1`;
+    const resp = await fetch(url);
+    if (!resp.ok) return [];
+    const data = await resp.json();
+    return data.data || [];
+  }
+
+  // ── Build SA query tiers: engine (0-2), core (3-4), heavy (5+) for each SA ──
+  function buildSAQueries(saName, saDesc) {
+    const name = saName.toLowerCase();
+    const desc = (saDesc || '').toLowerCase();
+
+    // Returns {engine: query, core: query, heavy: query} with MV-specific Scryfall queries
+    // Each tier gets its own tailored query to ensure proper MV distribution
+    let baseTerms = '';
+
+    // ── Lifegain archetype queries (Bilbo, Oloro, Lathiel, etc.) ──
+    if (/lifegain trigger/i.test(name) || (/lifegain|life.*gain|soul.*warden|drain|extort/i.test(desc) && !/doubl|explos|track|protect/i.test(desc))) {
+      return {
+        engine: `${ciFilter} (o:"whenever" o:"gain life" OR o:"lifelink" OR o:"extort" OR o:"whenever a creature enters" o:"gain") cmc<=2 -t:land`,
+        core: `${ciFilter} (o:"whenever" o:"gain life" OR o:"lifelink" OR (o:"gain" o:"life" o:"each")) cmc>=3 cmc<=4 -t:land`,
+        heavy: `${ciFilter} (o:"whenever" o:"gain life" OR o:"lifelink") cmc>=5 -t:land`
+      };
+    }
+    if (/explosive lifegain/i.test(name) || /explosive.*lifegain|big.*life|chunk.*life|massive.*gain/i.test(desc)) {
+      return {
+        engine: `${ciFilter} (o:"gain" o:"life" o:"equal" OR o:"exchange" o:"life" OR (t:creature o:"lifelink" pow>=3 cmc<=2)) cmc<=2 -t:land`,
+        core: `${ciFilter} (o:"gain" o:"life" o:"equal" OR o:"double your life" OR (t:creature o:"lifelink" pow>=3)) cmc>=3 cmc<=4 -t:land`,
+        heavy: `${ciFilter} (o:"life total becomes" OR o:"double your life" OR o:"gain" o:"life" o:"equal" OR (t:creature o:"lifelink" pow>=5)) cmc>=5 -t:land`
+      };
+    }
+    if (/life doubler/i.test(name) || /life.*doubl|doubl.*life|boon.*reflect|gain.*twice|plus 1 instead|additional life/i.test(desc)) {
+      return {
+        engine: `${ciFilter} (o:"if you would gain life" OR o:"additional" o:"life" OR o:"twice that much" o:"life") cmc<=2 -t:land`,
+        core: `${ciFilter} (o:"if you would gain life" OR o:"double" o:"life" OR o:"twice" o:"life" OR o:"additional" o:"life") cmc>=3 cmc<=4 -t:land`,
+        heavy: `${ciFilter} (o:"if you would gain life" OR o:"double" o:"life" OR o:"twice" o:"life") cmc>=5 -t:land`
+      };
+    }
+    if (/life track|life.*protect/i.test(name) || /life.*track|life.*protect|prevent.*damage|worship|fog|can't lose/i.test(desc)) {
+      return {
+        engine: `${ciFilter} (o:"prevent" o:"damage" OR o:"protection" OR o:"hexproof" OR o:"indestructible") cmc<=2 -t:land`,
+        core: `${ciFilter} (o:"prevent all" o:"damage" OR o:"can't lose the game" OR o:"life total can't") cmc>=3 cmc<=4 -t:land`,
+        heavy: `${ciFilter} (o:"prevent all" o:"damage" OR o:"can't lose the game" OR o:"fog") cmc>=5 -t:land`
+      };
+    }
+    if (/lifegain payoff/i.test(name) || /payoff.*life|life.*payoff|whenever you gain life.*create|whenever you gain life.*draw|whenever you gain life.*counter/i.test(desc)) {
+      return {
+        engine: `${ciFilter} o:"whenever you gain life" cmc<=2 -t:land`,
+        core: `${ciFilter} o:"whenever you gain life" cmc>=3 cmc<=4 -t:land`,
+        heavy: `${ciFilter} o:"whenever you gain life" cmc>=5 -t:land`
+      };
+    }
+
+    // ── Engine Insurance (protection/resilience for the strategy) ──
+    if (/engine insurance|insurance/i.test(name) || /protection|hexproof|indestructible|insurance|resilience/i.test(desc)) {
+      return {
+        engine: `${ciFilter} (o:"hexproof" OR o:"indestructible" OR o:"ward" OR o:"shroud" OR o:"regenerate") (t:creature OR t:instant) cmc<=2 -t:land`,
+        core: `${ciFilter} (o:"hexproof" OR o:"indestructible" OR o:"return" o:"from your graveyard" OR o:"ward") cmc>=3 cmc<=4 -t:land`,
+        heavy: `${ciFilter} (o:"indestructible" OR o:"return" o:"from your graveyard to the battlefield" OR o:"can't be countered") cmc>=5 cmc<=7 -t:land`
+      };
+    }
+
+    // ── Other common archetypes ──
+    if (/anthem|lord|buff/i.test(desc) || /anthem|lord|buff/i.test(name)) {
+      baseTerms = 'o:"creatures you control get" OR (o:"other" o:"get +")';
+    } else if (/token/i.test(desc) || /token/i.test(name)) {
+      baseTerms = 'o:"create" o:"token"';
+    } else if (/sacrifice|aristocrat|death/i.test(desc)) {
+      baseTerms = 'o:"sacrifice" OR o:"when" o:"dies"';
+    } else if (/counter|\+1|proliferate/i.test(desc)) {
+      baseTerms = 'o:"+1/+1 counter" OR o:"proliferate"';
+    } else if (/graveyard|reanimate|recursion/i.test(desc)) {
+      baseTerms = 'o:"from your graveyard" OR o:"return" o:"graveyard"';
+    } else if (/draw|card advantage/i.test(desc)) {
+      baseTerms = 'o:"draw a card"';
+    } else if (/enchant|aura|constellation/i.test(desc)) {
+      baseTerms = 't:enchantment o:"whenever"';
+    } else if (/artifact|equipment/i.test(desc)) {
+      baseTerms = 't:artifact';
+    } else if (/landfall|land.*enter/i.test(desc)) {
+      baseTerms = 'o:"landfall" OR o:"whenever a land"';
+    } else if (/copy|clone/i.test(desc)) {
+      baseTerms = 'o:"copy of" OR o:"clone"';
+    } else if (/combat|attack|power/i.test(desc)) {
+      baseTerms = 'o:"attacking" OR o:"combat damage"';
+    } else if (/tribal|creature type|lord/i.test(desc)) {
       const typeMatch = cmdrSD.type_line?.match(/— (.+)/);
       if (typeMatch) {
         const types = typeMatch[1].split(' ');
-        const mainType = types[types.length - 1]; // last type is usually the relevant one
-        oracleTerms.push(`(t:${mainType} OR o:"${mainType}")`);
+        baseTerms = `t:${types[types.length - 1]} OR o:"${types[types.length - 1]}"`;
       } else {
-        oracleTerms.push('o:"creatures you control"');
+        baseTerms = 'o:"creatures you control"';
       }
-    } else if (/evasion|unblockable|flying|menace/i.test(saDesc)) oracleTerms.push('(o:"flying" OR o:"menace" OR o:"can\'t be blocked")');
-    else if (/ramp|mana/i.test(saDesc)) oracleTerms.push('o:"add" t:creature');
-    else if (/token/i.test(saDesc)) oracleTerms.push('o:"create" o:"token"');
-    else {
-      // Fallback: search for cards matching the SA name
-      oracleTerms.push(`o:"${cs.saNames[i].split(' ')[0].toLowerCase()}"`);
+    } else if (/evasion|unblockable|flying|menace/i.test(desc)) {
+      baseTerms = 'o:"flying" OR o:"menace" OR o:"can\'t be blocked"';
+    } else if (/ramp|mana/i.test(desc)) {
+      baseTerms = 'o:"add" t:creature';
+    } else {
+      // Fallback: use first keyword from SA name
+      const keyword = saName.split(' ')[0].toLowerCase();
+      baseTerms = `o:"${keyword}"`;
     }
-    const primaryQuery = `${ciFilter} ${oracleTerms.join(' ')} -t:land`;
-    // Broader fallback query using just SA name keywords if primary fails
-    const saKeyword = cs.saNames[i].split(' ')[0].toLowerCase();
-    const fallbackQuery = `${ciFilter} (t:creature OR t:enchantment) -t:land`;
-    saQueries.push({ idx: i, name: cs.saNames[i], target: perSA, query: primaryQuery, fallbackQuery });
+
+    return {
+      engine: `${ciFilter} (${baseTerms}) cmc<=2 -t:land`,
+      core: `${ciFilter} (${baseTerms}) cmc>=3 cmc<=4 -t:land`,
+      heavy: `${ciFilter} (${baseTerms}) cmc>=5 cmc<=7 -t:land`
+    };
   }
 
-  // MV Budget enforcement for AI Fill queries
-  const bracket = STATE.characterSheet.bracket || '3';
-  // Ramp: must cost < commander MV (Horizontal Law)
-  const cmdrMV = cmdrSD.cmc || 4;
-  const rampMVCap = Math.max(2, cmdrMV - 1); // At least allow MV 2 ramp
-  // Interaction: prefer cheap — cap most at MV 3 for Bracket 4+, MV 4 otherwise
+  // MV Budget enforcement
+  const rampMVCap = Math.max(2, cmdrMV - 1);
   const intMVCap = (bracket === '4' || bracket === '5') ? 3 : 4;
 
+  // ── Build category list ──
   const categories = [
-    { cat: 'Ramp', target: rampTarget, query: `${ciFilter} (o:"add {" OR (o:"search your library" o:"land" o:"onto the battlefield") OR (t:artifact o:"add" cmc<=3)) cmc<=${rampMVCap} -t:land -t:creature`, mvCap: rampMVCap },
-    { cat: 'Ramp-creatures', target: 0, mergeInto: 'Ramp', mergeBonus: 2, query: `${ciFilter} t:creature (o:"add {" OR (o:"search your library" (o:"forest" OR o:"land") o:"onto the battlefield")) cmc<=${rampMVCap}`, mvCap: rampMVCap },
-    { cat: 'Velocity', target: velocityTarget, query: `${ciFilter} (o:"draw a card" OR o:"draw two" OR o:"draw cards") cmc<=4 -t:land`, mvCap: null },
-    { cat: 'Interaction', target: interactionTarget, query: `${ciFilter} (o:"destroy target" OR o:"exile target" OR o:"counter target" OR o:"return target") cmc<=${intMVCap} -t:land`, mvCap: null },
-    { cat: 'Wipe', target: wipeTarget, query: `${ciFilter} (o:"destroy all" OR o:"exile all" OR o:"-X/-X" o:"each creature") -t:land`, mvCap: null },
-    ...saQueries.map(sq => ({ cat: `SA-${sq.idx+1}`, target: sq.target, query: sq.query, mvCap: null })),
-    { cat: 'Land', target: landTarget, query: `${ciFilter} t:land`, mvCap: null }
+    { cat: 'Ramp', target: rampTarget, query: `${ciFilter} (o:"add {" OR (o:"search your library" o:"land" o:"onto the battlefield") OR (t:artifact o:"add" cmc<=3)) cmc<=${rampMVCap} -t:land -t:creature` },
+    { cat: 'Ramp-creatures', target: 0, mergeInto: 'Ramp', mergeBonus: 2, query: `${ciFilter} t:creature (o:"add {" OR (o:"search your library" (o:"forest" OR o:"land") o:"onto the battlefield")) cmc<=${rampMVCap}` },
+    { cat: 'Velocity', target: velocityTarget, query: `${ciFilter} (o:"draw a card" OR o:"draw two" OR o:"draw cards") cmc<=4 -t:land` },
+    { cat: 'Interaction', target: interactionTarget, query: `${ciFilter} (o:"destroy target" OR o:"exile target" OR o:"counter target" OR o:"return target") cmc<=${intMVCap} -t:land` },
+    { cat: 'Wipe', target: wipeTarget, query: `${ciFilter} (o:"destroy all" OR o:"exile all" OR o:"-X/-X" o:"each creature") -t:land` },
+    { cat: 'Land', target: landTarget, query: `${ciFilter} t:land` }
   ];
 
+  // ── Progress UI ──
   statusEl.innerHTML = '';
   const progressBox = el('div', { className: 'p-4 rounded-lg border border-mtg-gold/30 bg-mtg-dark/50' });
   const progressTitle = el('div', { className: 'text-sm font-semibold text-mtg-gold mb-2' }, ['Building your 99...']);
@@ -5164,89 +5259,133 @@ async function aiFill99(statusEl) {
   const addedNames = new Set(STATE.parsedCards.map(c => c.name.toLowerCase()));
   let totalAdded = 0;
 
+  // ── Helper: add cards from a Scryfall result set ──
+  function addCards(cards, assignCat, limit) {
+    let added = 0;
+    const catBudget = getMVBudget(assignCat, bracket);
+    let heavyAdded = 0;
+    const heavyLimit = catBudget?.heavyMax ?? 999;
+
+    for (const card of cards) {
+      if (added >= limit || totalAdded >= needed) break;
+      const name = card.name;
+      if (addedNames.has(name.toLowerCase())) continue;
+      if (card.legalities?.commander === 'banned') continue;
+
+      const cardMV = card.cmc || 0;
+      // MV Budget: skip heavy past limit
+      if (cardMV >= 5 && heavyAdded >= heavyLimit) continue;
+      // Ramp ceiling
+      if (catBudget?.cmdrCeiling && cmdrMV > 0 && cardMV >= cmdrMV) continue;
+      if (cardMV >= 5) heavyAdded++;
+
+      STATE.scryfallData[name] = card;
+      STATE.parsedCards.push({ qty: 1, name, isCommander: false });
+      addedNames.add(name.toLowerCase());
+
+      const autoCat = autoCategorize(name, false);
+      STATE.categories[name] = {
+        primary: assignCat,
+        secondary: autoCat?.primary && autoCat.primary !== assignCat ? autoCat.primary : (autoCat?.secondary || '')
+      };
+
+      added++;
+      totalAdded++;
+    }
+    return added;
+  }
+
+  // ── Phase 1: Fill Holy Trinity + Lands ──
   for (const catDef of categories) {
     if (catDef.target <= 0 && !catDef.mergeInto) continue;
     const mergeBonus = catDef.mergeBonus !== undefined ? catDef.mergeBonus : 4;
-    const effectiveTarget = catDef.mergeInto ? mergeBonus : catDef.target; // bonus cards for merge categories
+    const effectiveTarget = catDef.mergeInto ? mergeBonus : catDef.target;
     const catLabel = catDef.mergeInto || catDef.cat;
 
     progressLog.appendChild(el('div', { className: 'text-mtg-gold' }, [`Searching ${catDisplayName(catLabel)}...`]));
     progressLog.scrollTop = progressLog.scrollHeight;
 
     try {
-      // Scryfall search — randomized page offset for card diversity across runs
-      const pageOffset = Math.floor(Math.random() * 3) + 1; // pages 1-3
-      const searchUrl = `https://api.scryfall.com/cards/search?q=${encodeURIComponent(catDef.query)}&order=review&dir=desc&unique=cards&page=${pageOffset}`;
-      let resp = await fetch(searchUrl);
-      // If random page overshoots, fall back to page 1
-      if (!resp.ok) { resp = await fetch(`https://api.scryfall.com/cards/search?q=${encodeURIComponent(catDef.query)}&order=review&dir=desc&unique=cards&page=1`); }
-      // If primary query fails and there's a fallback, try that
-      if (!resp.ok && catDef.fallbackQuery) {
-        resp = await fetch(`https://api.scryfall.com/cards/search?q=${encodeURIComponent(catDef.fallbackQuery)}&order=review&dir=desc&unique=cards&page=1`);
-      }
-      if (!resp.ok) {
-        progressLog.appendChild(el('div', { className: 'text-yellow-400' }, [`No results for ${catDisplayName(catLabel)} — skipping`]));
-        continue;
-      }
-      const data = await resp.json();
-      const cards = data.data || [];
-
-      // Track heavy hitters added per category for MV budget enforcement
-      let heavyAdded = 0;
-      const assignCatKey = catDef.mergeInto || catDef.cat;
-      const catBudget = getMVBudget(assignCatKey, bracket);
-      const heavyLimit = catBudget?.heavyMax ?? 999;
-
-      let addedThisCat = 0;
-      for (const card of cards) {
-        if (addedThisCat >= effectiveTarget) break;
-        if (totalAdded >= needed) break;
-        const name = card.name;
-        if (addedNames.has(name.toLowerCase())) continue;
-        // Skip banned or restricted
-        if (card.legalities?.commander === 'banned') continue;
-
-        // MV Budget enforcement — skip heavy hitters past the budget
-        const cardMV = card.cmc || 0;
-        if (cardMV >= 5 && heavyAdded >= heavyLimit) continue;
-        // Ramp commander ceiling — skip ramp that costs >= commander MV
-        if (catBudget?.cmdrCeiling && cmdrMV > 0 && cardMV >= cmdrMV) continue;
-        if (cardMV >= 5) heavyAdded++;
-
-        // Add to deck
-        STATE.scryfallData[name] = card;
-        STATE.parsedCards.push({ qty: 1, name, isCommander: false });
-        addedNames.add(name.toLowerCase());
-
-        // Auto-categorize for secondary assignment
-        const autoCat = autoCategorize(name, false);
-        // ALWAYS use the searched category as primary — this is what we were looking for
-        const assignCat = catDef.mergeInto || catDef.cat;
-        STATE.categories[name] = {
-          primary: assignCat,
-          secondary: autoCat?.primary && autoCat.primary !== assignCat ? autoCat.primary : (autoCat?.secondary || '')
-        };
-
-        addedThisCat++;
-        totalAdded++;
-      }
-
-      progressLog.appendChild(el('div', {}, [`Added ${addedThisCat} ${catDisplayName(catLabel)} cards`]));
-
-      // Respect Scryfall rate limit (100ms between requests)
-      await new Promise(r => setTimeout(r, 120));
+      const cards = await scrySearch(catDef.query, 'edhrec');
+      await scryDelay();
+      const assignCat = catDef.mergeInto || catDef.cat;
+      const added = addCards(cards, assignCat, effectiveTarget);
+      progressLog.appendChild(el('div', {}, [`Added ${added} ${catDisplayName(catLabel)} cards`]));
     } catch (e) {
       progressLog.appendChild(el('div', { className: 'text-red-400' }, [`Error searching ${catDisplayName(catLabel)}: ${e.message}`]));
     }
   }
 
-  // ── Fallback pass — fill under-served categories with broader queries ──
+  // ── Phase 2: Fill SA categories with tiered MV queries ──
+  // This is the key improvement: each SA gets 3 separate Scryfall queries
+  // Engine (0-2) gets ~55% of slots, Core (3-4) gets ~30%, Heavy (5+) gets ~15%
+  for (let i = 0; i < 5; i++) {
+    if (!cs.saNames[i] || !cs.saNames[i].trim()) continue;
+    const saName = cs.saNames[i];
+    const saDesc = cs.sa[i] || '';
+    const assignCat = `SA-${i + 1}`;
+    const tierQueries = buildSAQueries(saName, saDesc);
+
+    // MV distribution: engine-heavy for enablers
+    const engineTarget = Math.ceil(perSA * 0.55);   // ~55% cheap enablers
+    const coreTarget = Math.ceil(perSA * 0.30);     // ~30% mid-range
+    const heavyTarget = Math.max(1, perSA - engineTarget - coreTarget); // ~15% finishers
+
+    progressLog.appendChild(el('div', { className: 'text-mtg-gold' }, [`Searching ${saName} (${perSA} cards across 3 tiers)...`]));
+    progressLog.scrollTop = progressLog.scrollHeight;
+
+    let saTotal = 0;
+
+    // Engine tier first (MV 0-2) — most important for early game
+    try {
+      const engineCards = await scrySearch(tierQueries.engine, 'edhrec');
+      await scryDelay();
+      const added = addCards(engineCards, assignCat, engineTarget);
+      saTotal += added;
+      if (added > 0) progressLog.appendChild(el('div', { className: 'text-green-400/70' }, [`  Engine (0-2): ${added} cards`]));
+    } catch (e) { /* continue to next tier */ }
+
+    // Core tier (MV 3-4)
+    try {
+      const coreCards = await scrySearch(tierQueries.core, 'edhrec');
+      await scryDelay();
+      const added = addCards(coreCards, assignCat, coreTarget);
+      saTotal += added;
+      if (added > 0) progressLog.appendChild(el('div', { className: 'text-blue-400/70' }, [`  Core (3-4): ${added} cards`]));
+    } catch (e) { /* continue */ }
+
+    // Heavy tier (MV 5+) — small number of finishers
+    try {
+      const heavyCards = await scrySearch(tierQueries.heavy, 'edhrec');
+      await scryDelay();
+      const added = addCards(heavyCards, assignCat, heavyTarget);
+      saTotal += added;
+      if (added > 0) progressLog.appendChild(el('div', { className: 'text-purple-400/70' }, [`  Heavy (5+): ${added} cards`]));
+    } catch (e) { /* continue */ }
+
+    // If we didn't reach the target, do a broader fallback search
+    const remaining = perSA - saTotal;
+    if (remaining > 0) {
+      try {
+        // Broader query: just match the general theme without MV restriction
+        const broadQuery = `${ciFilter} (${tierQueries.engine.replace(`${ciFilter} `, '').replace(/cmc[<>=]+\d+\s*/g, '').replace('-t:land', '').trim()}) -t:land`;
+        const broadCards = await scrySearch(broadQuery, 'edhrec');
+        await scryDelay();
+        const added = addCards(broadCards, assignCat, remaining);
+        saTotal += added;
+        if (added > 0) progressLog.appendChild(el('div', { className: 'text-yellow-400/70' }, [`  Broad fallback: ${added} cards`]));
+      } catch (e) { /* best effort */ }
+    }
+
+    progressLog.appendChild(el('div', {}, [`Added ${saTotal}/${perSA} ${saName} cards`]));
+  }
+
+  // ── Phase 3: Fallback pass — fill under-served categories ──
   const currentTotal = STATE.parsedCards.filter(c => !c.isCommander).length;
   const stillNeeded = 99 - currentTotal;
   if (stillNeeded > 0) {
     const catCounts = calcCategoryCounts();
     const fallbackCats = [];
-    // Check which core categories are still short
     if ((catCounts['Ramp'] || 0) < profile.ramp[0]) fallbackCats.push({ cat: 'Ramp', short: profile.ramp[0] - (catCounts['Ramp'] || 0), query: `${ciFilter} (t:artifact o:"add" OR t:creature o:"add {" OR o:"search" o:"land") cmc<=3 -t:land` });
     if ((catCounts['Velocity'] || 0) < profile.velocity[0]) fallbackCats.push({ cat: 'Velocity', short: profile.velocity[0] - (catCounts['Velocity'] || 0), query: `${ciFilter} o:"draw" -t:land cmc<=4` });
     if ((catCounts['Interaction'] || 0) < profile.interaction[0]) fallbackCats.push({ cat: 'Interaction', short: profile.interaction[0] - (catCounts['Interaction'] || 0), query: `${ciFilter} (o:"destroy target" OR o:"exile target" OR o:"counter target") -t:land` });
@@ -5255,25 +5394,10 @@ async function aiFill99(statusEl) {
       if (totalAdded >= needed) break;
       progressLog.appendChild(el('div', { className: 'text-yellow-400' }, [`Fallback: filling ${fb.short} more ${fb.cat}...`]));
       try {
-        const fbResp = await fetch(`https://api.scryfall.com/cards/search?q=${encodeURIComponent(fb.query)}&order=review&dir=desc&unique=cards`);
-        if (fbResp.ok) {
-          const fbData = await fbResp.json();
-          let fbAdded = 0;
-          for (const card of (fbData.data || [])) {
-            if (fbAdded >= fb.short || totalAdded >= needed) break;
-            if (addedNames.has(card.name.toLowerCase())) continue;
-            if (card.legalities?.commander === 'banned') continue;
-            STATE.scryfallData[card.name] = card;
-            STATE.parsedCards.push({ qty: 1, name: card.name, isCommander: false });
-            addedNames.add(card.name.toLowerCase());
-            const autoCat = autoCategorize(card.name, false);
-            STATE.categories[card.name] = autoCat || { primary: fb.cat, secondary: '' };
-            if (!STATE.categories[card.name].primary) STATE.categories[card.name].primary = fb.cat;
-            fbAdded++; totalAdded++;
-          }
-          progressLog.appendChild(el('div', {}, [`Fallback added ${fbAdded} ${fb.cat} cards`]));
-        }
-        await new Promise(r => setTimeout(r, 120));
+        const cards = await scrySearch(fb.query, 'edhrec');
+        await scryDelay();
+        const added = addCards(cards, fb.cat, fb.short);
+        progressLog.appendChild(el('div', {}, [`Fallback added ${added} ${fb.cat} cards`]));
       } catch (e) { /* fallback is best-effort */ }
     }
   }
